@@ -1,11 +1,12 @@
 ﻿// VIGILANT.cpp : Bu dosya 'main' işlevi içeriyor. Program yürütme orada başlayıp biter.
 //
 
+#include <windows.h>
 #include <iostream>
 
-int main()
-{
-    std::cout << "Hello World!\n";
+int main() {
+    std::cout << "VIGILANT Engine Initialized..." << std::endl;
+    return 0;
 }
 
 // Programı çalıştır: Ctrl + F5 veya Hata Ayıkla > Hata Ayıklamadan Başlat menüsü

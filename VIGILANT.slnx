@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="VIGILANT/VIGILANT.vcxproj" />
+  <Project Path="VIGILANT/VIGILANT.vcxproj" Id="a7ab386f-f075-4c2a-892c-60859335b9fa" />
 </Solution>
