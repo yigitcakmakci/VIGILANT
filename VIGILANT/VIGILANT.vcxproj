@@ -19,7 +19,17 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\BrowserBridge.cpp" />
+    <ClCompile Include="src\IdleTracker.cpp" />
     <ClCompile Include="src\VIGILANT.cpp" />
+    <ClCompile Include="src\WindowTracker.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\BrowserBridge.hpp" />
+    <ClInclude Include="include\DatabaseManager.hpp" />
+    <ClInclude Include="include\EventQueue.hpp" />
+    <ClInclude Include="include\IdleTracker.hpp" />
+    <ClInclude Include="include\WindowTracker.hpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>

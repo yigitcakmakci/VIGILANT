@@ -1,21 +1,88 @@
-﻿// VIGILANT.cpp : Bu dosya 'main' işlevi içeriyor. Program yürütme orada başlayıp biter.
+﻿//#include <iostream>
+//#include <thread> // Test için sleep kullanacağız
+//#include <chrono>
+//#include "IdleTracker.hpp"
 //
+//int main() {
+//    // 5 saniye boyunca işlem yapılmazsa IDLE sayacak bir tracker
+//    IdleTracker ghostEye(5);
+//
+//    std::cout << "VIGILANT Ghost Eye: Monitoring Idle State..." << std::endl;
+//    std::cout << "Threshold set to 5 seconds." << std::endl;
+//
+//    while (true) {
+//        if (ghostEye.isUserIdle()) {
+//            std::cout << "[STATUS: IDLE] - Time: " << ghostEye.getIdleTimeMillis() / 1000 << "s" << std::endl;
+//        }
+//        else {
+//            std::cout << "[STATUS: ACTIVE]" << std::endl;
+//        }
+//
+//        // CPU'yu yormamak için 1 saniye bekle (42 disiplini: performans!)
+//        std::this_thread::sleep_for(std::chrono::seconds(1));
+//    }
+//
+//    return 0;
+//}
 
-#include <windows.h>
+//#include "WindowTracker.hpp"
+//#include <iostream>
+//
+//int main() {
+//    std::cout << "VIGILANT Ghost: Window Tracking Initiated..." << std::endl;
+//
+//    WindowTracker::StartTracking();
+//
+//    // Windows Mesaj Döngüsü (Hook'un çalışması için ŞART)
+//    MSG msg;
+//    while (GetMessage(&msg, nullptr, 0, 0)) {
+//        TranslateMessage(&msg);
+//        DispatchMessage(&msg);
+//    }
+//
+//    WindowTracker::StopTracking();
+//    return 0;
+//}
+
+#include "WindowTracker.hpp"
+#include "EventQueue.hpp"
 #include <iostream>
+#include <thread>
 
-int main() {
-    std::cout << "VIGILANT Engine Initialized..." << std::endl;
-    return 0;
+// Global nesneler
+EventQueue g_EventQueue;
+
+// Arka planda çalışan işçi fonksiyonu
+void BackgroundWorker() {
+    EventData data;
+    while (g_EventQueue.pop(data)) {
+        // Asıl ağır işler (ekrana yazma, ileride DB'ye kaydetme) burada
+        std::cout << "\n[WORKER] Processing Activity:" << std::endl;
+        std::cout << "  -> Title: " << data.title << std::endl;
+        if (!data.url.empty()) std::cout << "  -> URL:   " << data.url << std::endl;
+        std::cout << "-------------------------------" << std::endl;
+    }
 }
 
-// Programı çalıştır: Ctrl + F5 veya Hata Ayıkla > Hata Ayıklamadan Başlat menüsü
-// Programda hata ayıkla: F5 veya Hata Ayıkla > Hata Ayıklamayı Başlat menüsü
+int main() {
+    std::cout << "VIGILANT v0.1 ALPHA - Ghost Engine Active" << std::endl;
 
-// Kullanmaya Başlama İpuçları: 
-//   1. Dosyaları eklemek/yönetmek için Çözüm Gezgini penceresini kullanın
-//   2. Kaynak denetimine bağlanmak için Takım Gezgini penceresini kullanın
-//   3. Derleme çıktısını ve diğer iletileri görmek için Çıktı penceresini kullanın
-//   4. Hataları görüntülemek için Hata Listesi penceresini kullanın
-//   5. Yeni kod dosyaları oluşturmak için Projeye Git > Yeni Öğe ekle veya varolan kod dosyalarını projeye eklemek için Proje > Var Olan Öğeyi Ekle adımlarını izleyin
-//   6. Bu projeyi daha sonra yeniden açmak için Dosya > Aç > Proje'ye gidip .sln uzantılı dosyayı seçin
+    // İşçi thread'ini başlat (Tüketici)
+    std::thread worker(BackgroundWorker);
+
+    // Kancayı at (Üretici)
+    WindowTracker::StartTracking();
+
+    // Windows Mesaj Döngüsü (Ana Thread burada bekler)
+    MSG msg;
+    while (GetMessage(&msg, nullptr, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    WindowTracker::StopTracking();
+    g_EventQueue.stop();
+    worker.join(); // İşçinin işini bitirmesini bekle
+
+    return 0;
+}
