@@ -1,8 +1,11 @@
 #include "DatabaseManager.hpp"
 #include <iostream>
 
+// DatabaseManager.cpp constructor kısmına bir kontrol ekleyelim:
 DatabaseManager::DatabaseManager(const std::string& dbName) : db(nullptr) {
-    sqlite3_open(dbName.c_str(), &db);
+    if (sqlite3_open(dbName.c_str(), &db) != SQLITE_OK) {
+        std::cerr << "VERITABANI ACILAMADI: " << sqlite3_errmsg(db) << std::endl;
+    }
 }
 
 DatabaseManager::~DatabaseManager() {
@@ -19,6 +22,7 @@ bool DatabaseManager::init() {
         "PROCESS TEXT, TITLE TEXT, URL TEXT, DURATION INTEGER DEFAULT 0);";
     sqlite3_exec(db, sql, NULL, 0, &zErrMsg);
 
+    sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_activities_proc_title ON Activities(PROCESS, TITLE);", NULL, 0, &zErrMsg);
     // 2. KnowledgeBase Tablosu (Sözlük)
     const char* kbSql = "CREATE TABLE IF NOT EXISTS KnowledgeBase ("
         "PROCESS TEXT,"
@@ -144,4 +148,69 @@ bool DatabaseManager::saveAILabels(const std::string& process, const std::string
     }
     sqlite3_finalize(stmt);
     return success;
+}
+
+std::vector<ActivityLog> DatabaseManager::getRecentLogs(int limit) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    std::vector<ActivityLog> logs;
+
+    // YENI AKILLI SORGU: 
+    // LEFT JOIN yaparken hem tam eşleşmeye, hem LIKE (içinde geçiyor mu) 
+    // durumuna hem de yıldız (*) jokerine bakıyoruz.
+    const char* sql =
+        "SELECT al.PROCESS, al.TITLE, "
+        "       COALESCE(kb.CATEGORY, 'Uncategorized') as CAT, "
+        "       COALESCE(kb.SCORE, 0) as SCR, "
+        "       al.DURATION "
+        "FROM Activities al "
+        "LEFT JOIN KnowledgeBase kb ON al.PROCESS = kb.PROCESS "
+        "AND (kb.TITLE_KEYWORD = '*' OR al.TITLE LIKE '%' || kb.TITLE_KEYWORD || '%') "
+        "GROUP BY al.ID " // Eğer birden fazla kurala uyarsa (hem '*' hem 'notion' gibi), satırı çoğaltmasın diye
+        "ORDER BY al.ID DESC LIMIT ?;";
+
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, limit);
+
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            ActivityLog log;
+
+            const unsigned char* pTxt = sqlite3_column_text(stmt, 0);
+            log.process = pTxt ? reinterpret_cast<const char*>(pTxt) : "Unknown";
+
+            const unsigned char* tTxt = sqlite3_column_text(stmt, 1);
+            log.title = tTxt ? reinterpret_cast<const char*>(tTxt) : "Untitled";
+
+            log.category = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            log.score = sqlite3_column_int(stmt, 3);
+            log.duration = sqlite3_column_int(stmt, 4);
+
+            logs.push_back(log);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return logs;
+}
+
+std::map<std::string, float> DatabaseManager::getCategoryDistribution() {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    std::map<std::string, float> stats;
+
+    const char* sql =
+        "SELECT COALESCE(kb.CATEGORY, 'Uncategorized'), SUM(al.DURATION) "
+        "FROM Activities al "
+        "LEFT JOIN KnowledgeBase kb ON al.PROCESS = kb.PROCESS "
+        "AND (kb.TITLE_KEYWORD = '*' OR al.TITLE LIKE '%' || kb.TITLE_KEYWORD || '%') "
+        "GROUP BY 1;";
+
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            std::string cat = (const char*)sqlite3_column_text(stmt, 0);
+            float duration = (float)sqlite3_column_int(stmt, 1);
+            stats[cat] = duration;
+        }
+    }
+    sqlite3_finalize(stmt);
+    return stats;
 }
