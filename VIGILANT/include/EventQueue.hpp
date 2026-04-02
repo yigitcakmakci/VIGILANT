@@ -8,6 +8,7 @@
 
 // Yakalanan her bir odak değişiminin paketi
 struct EventData {
+    std::string processName; // örn: msedge.exe
     std::string title;
     std::string url;
     std::string timestamp; // İleride analiz için lazım olacak

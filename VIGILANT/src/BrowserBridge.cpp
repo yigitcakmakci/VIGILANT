@@ -19,7 +19,7 @@ std::string BrowserBridge::GetActiveURL(HWND hwnd) {
 
     // 1. HWND'den Element oluştur
     if (SUCCEEDED(pAutomation->ElementFromHandle(hwnd, &pElement))) {
-
+        
         // 2. Arama Koşulu: Kontrol tipi "Edit" (Giriş kutusu) olanı ara
         IUIAutomationCondition* pCondition = nullptr;
         VARIANT varProp;
@@ -28,7 +28,7 @@ std::string BrowserBridge::GetActiveURL(HWND hwnd) {
 
         if (SUCCEEDED(pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, varProp, &pCondition))) {
             IUIAutomationElement* pEditBox = nullptr;
-
+            
             // 3. Ağaçta ilk eşleşeni bul (FindFirst)
             if (SUCCEEDED(pElement->FindFirst(TreeScope_Descendants, pCondition, &pEditBox)) && pEditBox) {
                 VARIANT varValue;

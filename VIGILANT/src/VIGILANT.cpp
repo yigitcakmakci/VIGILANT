@@ -46,34 +46,48 @@
 
 #include "WindowTracker.hpp"
 #include "EventQueue.hpp"
+#include "DatabaseManager.hpp"
 #include <iostream>
 #include <thread>
+#include <chrono>
 
-// Global nesneler
 EventQueue g_EventQueue;
+DatabaseManager g_Vault("vigilant_vault.db");
 
-// Arka planda çalışan işçi fonksiyonu
 void BackgroundWorker() {
+    g_Vault.init();
     EventData data;
+    int lastId = -1;
+    std::string lastTitle = "";
+    auto lastStartTime = std::chrono::steady_clock::now();
+
     while (g_EventQueue.pop(data)) {
-        // Asıl ağır işler (ekrana yazma, ileride DB'ye kaydetme) burada
-        std::cout << "\n[WORKER] Processing Activity:" << std::endl;
-        std::cout << "  -> Title: " << data.title << std::endl;
-        if (!data.url.empty()) std::cout << "  -> URL:   " << data.url << std::endl;
-        std::cout << "-------------------------------" << std::endl;
+        if (data.title.empty() || data.title == "Adsız") continue;
+
+        auto now = std::chrono::steady_clock::now();
+
+        // Odak değiştiyse süreyi hesapla ve yaz
+        if (lastId != -1 && data.title != lastTitle) {
+            auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - lastStartTime).count();
+            g_Vault.updateDuration(lastId, static_cast<int>(duration));
+        }
+
+        // Aynı pencereyse yeni kayıt açma
+        if (data.title == lastTitle) continue;
+
+        // Yeni kayıt aç
+        lastId = g_Vault.logActivity(data);
+        lastTitle = data.title;
+        lastStartTime = now;
+
+        std::cout << "[VAULT] Monitoring: " << data.processName << " -> " << data.title << std::endl;
     }
 }
 
 int main() {
-    std::cout << "VIGILANT v0.1 ALPHA - Ghost Engine Active" << std::endl;
-
-    // İşçi thread'ini başlat (Tüketici)
     std::thread worker(BackgroundWorker);
-
-    // Kancayı at (Üretici)
     WindowTracker::StartTracking();
 
-    // Windows Mesaj Döngüsü (Ana Thread burada bekler)
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0)) {
         TranslateMessage(&msg);
@@ -82,7 +96,6 @@ int main() {
 
     WindowTracker::StopTracking();
     g_EventQueue.stop();
-    worker.join(); // İşçinin işini bitirmesini bekle
-
+    worker.join();
     return 0;
 }

@@ -20,7 +20,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\BrowserBridge.cpp" />
+    <ClCompile Include="src\DatabaseManager.cpp" />
     <ClCompile Include="src\IdleTracker.cpp" />
+    <ClCompile Include="src\sqlite3.c" />
     <ClCompile Include="src\VIGILANT.cpp" />
     <ClCompile Include="src\WindowTracker.cpp" />
   </ItemGroup>
@@ -29,6 +31,7 @@
     <ClInclude Include="include\DatabaseManager.hpp" />
     <ClInclude Include="include\EventQueue.hpp" />
     <ClInclude Include="include\IdleTracker.hpp" />
+    <ClInclude Include="include\sqlite3.h" />
     <ClInclude Include="include\WindowTracker.hpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
