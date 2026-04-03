@@ -2,13 +2,13 @@
 #define DATABASE_MANAGER_HPP
 
 #include <string>
-#include <utility>
 #include <vector>
+#include <map>
+#include <mutex>
 #include "sqlite3.h"
 #include "EventQueue.hpp"
-#include <map>
 
-// Gecmis kayitlari ekrana basmak icin bir yapi (struct)
+// Geçmiş kayıtları ekrana basmak için kullanılan yapı
 struct ActivityLog {
     std::string process = "";
     std::string title = "";
@@ -20,20 +20,24 @@ struct ActivityLog {
 class DatabaseManager {
 private:
     sqlite3* db;
-    std::mutex db_mutex; // Bu bizim kapı görevlimiz
-    char* zErrMsg = 0;
+    std::mutex db_mutex;
+    char* zErrMsg = nullptr;
 
 public:
     DatabaseManager(const std::string& dbName);
     ~DatabaseManager();
 
-    bool saveAILabels(const std::string& process, const std::string& title, const std::string& category, int score);
     bool init();
     int logActivity(const EventData& data);
     void updateDuration(int id, int seconds);
-    std::vector<ActivityLog> getRecentLogs(int limit = 10);
-    std::map<std::string, float> getCategoryDistribution();
 
+    // AI ve Manuel Kategorizasyon
+    void injectAICategory(const std::string& appName, const std::string& category, int score);
+    bool saveAILabels(const std::string& process, const std::string& title, const std::string& category, int score);
+
+    // Veri Çekme Fonksiyonları
+    std::vector<ActivityLog> getRecentLogs(int limit = 15);
+    std::map<std::string, float> getCategoryDistribution();
     std::pair<int, std::string> getScoreForActivity(const std::string& process, const std::string& title);
     std::vector<std::pair<std::string, std::string>> getUncategorizedActivities();
 };
