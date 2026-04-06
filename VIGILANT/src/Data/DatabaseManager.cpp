@@ -72,25 +72,8 @@ void DatabaseManager::updateDuration(int id, int seconds) {
     sqlite3_finalize(stmt);
 }
 
-// AI'dan gelen veriyi KnowledgeBase'e jilet gibi işliyoruz
-void DatabaseManager::injectAICategory(const std::string& appName, const std::string& category, int score) {
-    std::lock_guard<std::mutex> lock(db_mutex);
-    sqlite3_stmt* stmt;
-    const char* sql = "INSERT OR REPLACE INTO KnowledgeBase (PROCESS, TITLE_KEYWORD, CATEGORY, SCORE) VALUES (?, '*', ?, ?);";
-
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, appName.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 2, category.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 3, score);
-
-        if (sqlite3_step(stmt) == SQLITE_DONE) {
-            std::cout << "[DB] AI Verisi Islendi: " << appName << " -> " << category << std::endl;
-        }
-        sqlite3_finalize(stmt);
-    }
-}
-
 std::pair<int, std::string> DatabaseManager::getScoreForActivity(const std::string& process, const std::string& title) {
+    std::lock_guard<std::mutex> lock(db_mutex);
     sqlite3_stmt* stmt;
     const char* sql = "SELECT SCORE, CATEGORY FROM KnowledgeBase "
         "WHERE PROCESS = ? AND (TITLE_KEYWORD = '*' OR ? LIKE '%' || TITLE_KEYWORD || '%') "
@@ -112,18 +95,20 @@ std::pair<int, std::string> DatabaseManager::getScoreForActivity(const std::stri
 }
 
 std::vector<std::pair<std::string, std::string>> DatabaseManager::getUncategorizedActivities() {
+    std::lock_guard<std::mutex> lock(db_mutex);
     std::vector<std::pair<std::string, std::string>> unknowns;
     sqlite3_stmt* stmt;
-    const char* sql = "SELECT DISTINCT PROCESS, TITLE FROM Activities;";
+    const char* sql =
+        "SELECT DISTINCT a.PROCESS, a.TITLE FROM Activities a "
+        "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
+        "AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
+        "WHERE k.CATEGORY IS NULL;";
 
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             std::string proc = (const char*)sqlite3_column_text(stmt, 0);
             std::string tit = (const char*)sqlite3_column_text(stmt, 1);
-            auto res = getScoreForActivity(proc, tit);
-            if (res.second == "Uncategorized") {
-                unknowns.push_back({ proc, tit });
-            }
+            unknowns.push_back({ proc, tit });
         }
         sqlite3_finalize(stmt);
     }

@@ -1,6 +1,5 @@
 #include <windows.h>
 #include <thread>
-#include <iostream>
 #include <memory>
 #include "Data/DatabaseManager.hpp"
 #include "Core/WindowTracker.hpp"
@@ -82,18 +81,14 @@ int main() {
     // WebView2 callbacks need to run in the message loop
     OutputDebugStringW(L"WebView2 initialization started in background thread\n");
 
-    // 4. Start HTTP Server
-    g_WebViewManager->StartHTTPServer();
-    OutputDebugStringW(L"HTTP Server started\n");
-
-    // 5. Show Window
+    // 4. Show Window
     ::ShowWindow(hwnd, SW_SHOWDEFAULT);
     ::UpdateWindow(hwnd);
     OutputDebugStringW(L"Window shown\n");
 
     OutputDebugStringW(L"Entering message loop...\n");
 
-    // 6. MAIN MESSAGE LOOP - This is where WebView2 callbacks execute
+    // 5. MAIN MESSAGE LOOP - This is where WebView2 callbacks execute
     bool done = false;
     while (!done) {
         MSG msg;
@@ -121,9 +116,8 @@ int main() {
 
     OutputDebugStringW(L"Cleaning up...\n");
 
-    // 7. Cleanup
+    // 6. Cleanup
     if (g_WebViewManager) {
-        g_WebViewManager->StopHTTPServer();
         delete g_WebViewManager;
     }
 
@@ -142,9 +136,3 @@ int main() {
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     return main();
 }
-
-// Background worker (aktivite izleme) - fully implemented in Workers.cpp
-void BackgroundWorker();
-
-// Hotkey worker - fully implemented in Workers.cpp  
-void HotkeyWorker();

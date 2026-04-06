@@ -31,8 +31,7 @@ public:
     int logActivity(const EventData& data);
     void updateDuration(int id, int seconds);
 
-    // AI ve Manuel Kategorizasyon
-    void injectAICategory(const std::string& appName, const std::string& category, int score);
+    // AI Kategorizasyon
     bool saveAILabels(const std::string& process, const std::string& title, const std::string& category, int score);
 
     // Veri Çekme Fonksiyonları

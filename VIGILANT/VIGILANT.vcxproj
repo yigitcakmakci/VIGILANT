@@ -20,7 +20,6 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\AI\GeminiService.cpp" />
-    <ClCompile Include="src\IdleTracker.cpp" />
     <ClCompile Include="src\Core\WindowTracker.cpp" />
     <ClCompile Include="src\UI\BrowserBridge.cpp" />
     <ClCompile Include="src\Data\DatabaseManager.cpp" />
@@ -28,22 +27,17 @@
     <ClCompile Include="src\UI\WebViewManager.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\Globals.cpp" />
-    <ClCompile Include="src\Renderer.cpp" />
     <ClCompile Include="src\Window.cpp" />
     <ClCompile Include="src\Workers.cpp" />
     <ClCompile Include="src\Instances.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\AI\GeminiService.hpp" />
-    <ClInclude Include="include\IdleTracker.hpp" />
     <ClInclude Include="include\Core\WindowTracker.hpp" />
     <ClInclude Include="include\UI\BrowserBridge.hpp" />
     <ClInclude Include="include\Utils\EventQueue.hpp" />
     <ClInclude Include="include\Data\DatabaseManager.hpp" />
     <ClInclude Include="vendor\sqlite\sqlite3.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="VIGILANT\dashboard_simple.html" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
@@ -141,13 +135,10 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>copy "$(ProjectDir)test.html" "$(OutDir)test.html"
-copy "$(ProjectDir)dashboard.html" "$(OutDir)dashboard.html"
-copy "$(ProjectDir)dashboard_simple.html" "$(OutDir)dashboard_simple.html"
-copy "$(ProjectDir)dashboard_pro.html" "$(OutDir)dashboard_pro.html"</Command>
+      <Command>copy "$(ProjectDir)dashboard_pro.html" "$(OutDir)dashboard_pro.html"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -166,13 +157,10 @@ copy "$(ProjectDir)dashboard_pro.html" "$(OutDir)dashboard_pro.html"</Command>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>copy "$(ProjectDir)test.html" "$(OutDir)test.html"
-copy "$(ProjectDir)dashboard.html" "$(OutDir)dashboard.html"
-copy "$(ProjectDir)dashboard_simple.html" "$(OutDir)dashboard_simple.html"
-copy "$(ProjectDir)dashboard_pro.html" "$(OutDir)dashboard_pro.html"</Command>
+      <Command>copy "$(ProjectDir)dashboard_pro.html" "$(OutDir)dashboard_pro.html"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
