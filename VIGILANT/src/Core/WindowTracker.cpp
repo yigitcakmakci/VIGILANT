@@ -6,24 +6,36 @@
 
 #pragma comment(lib, "Psapi.lib")
 
-// Static üyeyi tanımlıyoruz
-HWINEVENTHOOK WindowTracker::hHook = nullptr;
+// Static uyeleri tanimliyoruz
+HWINEVENTHOOK WindowTracker::hHookForeground = nullptr;
+HWINEVENTHOOK WindowTracker::hHookNameChange = nullptr;
 
 void WindowTracker::StartTracking() {
-    // Kancayı atıyoruz: Sadece FOREGROUND (ön plan) değişimlerini dinle
-    hHook = SetWinEventHook(
-        EVENT_SYSTEM_FOREGROUND, EVENT_OBJECT_NAMECHANGE, // Başlangıç ve bitiş olayı aynı
-        nullptr,                                          // DLL kullanmıyoruz
-        WindowTracker::WinEventProc,                      // Bizim ihbar fonksiyonu
-        0, 0,                                             // Tüm süreçleri ve threadleri dinle
-        WINEVENT_OUTOFCONTEXT                             // Kendi sürecimizden dinle
+    // Hook 1: Sadece EVENT_SYSTEM_FOREGROUND — on plan degisimi
+    hHookForeground = SetWinEventHook(
+        EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+        nullptr,
+        WindowTracker::WinEventProc,
+        0, 0,
+        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
     );
 
-    if (hHook) std::cout << "[GHOST] Hook attached successfully." << std::endl;
+    // Hook 2: Sadece EVENT_OBJECT_NAMECHANGE — baslik degisimi
+    hHookNameChange = SetWinEventHook(
+        EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE,
+        nullptr,
+        WindowTracker::WinEventProc,
+        0, 0,
+        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
+    );
+
+    if (hHookForeground && hHookNameChange)
+        std::cout << "[GHOST] Hooks attached successfully (narrow range)." << std::endl;
 }
 
 void WindowTracker::StopTracking() {
-    if (hHook) UnhookWinEvent(hHook);
+    if (hHookForeground) UnhookWinEvent(hHookForeground);
+    if (hHookNameChange) UnhookWinEvent(hHookNameChange);
 }
 
 BrowserBridge g_Bridge;

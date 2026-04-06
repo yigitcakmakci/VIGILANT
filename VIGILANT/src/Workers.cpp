@@ -4,19 +4,17 @@
 #include <iostream>
 #include "Utils/EventQueue.hpp"
 #include "Data/DatabaseManager.hpp"
-#include "AI/GeminiService.hpp"
 
 extern DatabaseManager g_Vault;
 extern EventQueue g_EventQueue;
-extern GeminiService g_Gemini;
 
 // --- BackgroundWorker ---
 // Olaylari kuyruktan alir, DB'ye yazar ve onceki aktivitenin suresini gunceller.
+// AI siniflandirma artik AIClassifierTask tarafindan bagimsiz thread'de yapilir.
 void BackgroundWorker()
 {
     int lastActivityId = -1;
     auto lastTime = std::chrono::steady_clock::now();
-    auto lastAIRun = std::chrono::steady_clock::now();
 
     while (true)
     {
@@ -38,27 +36,6 @@ void BackgroundWorker()
         // Yeni aktiviteyi kaydet
         lastActivityId = g_Vault.logActivity(data);
         lastTime = now;
-
-        // Periyodik AI siniflandirma (her 5 dakikada bir)
-        auto minutesSinceAI = std::chrono::duration_cast<std::chrono::minutes>(
-            now - lastAIRun).count();
-
-        if (minutesSinceAI >= 5 && g_Gemini.isAvailable()) {
-            auto unknowns = g_Vault.getUncategorizedActivities();
-            if (!unknowns.empty()) {
-                std::cout << "[Worker] " << unknowns.size()
-                          << " kategorize edilmemis aktivite AI'a gonderiliyor..." << std::endl;
-
-                auto labels = g_Gemini.classifyActivities(unknowns);
-                for (const auto& label : labels) {
-                    g_Vault.saveAILabels(label.process, label.titleKeyword,
-                                         label.category, label.score);
-                }
-                std::cout << "[Worker] AI " << labels.size()
-                          << " etiket isledi." << std::endl;
-            }
-            lastAIRun = now;
-        }
     }
 }
 

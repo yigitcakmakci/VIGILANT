@@ -19,28 +19,38 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\AI\AIClassifierTask.cpp" />
     <ClCompile Include="src\AI\GeminiService.cpp" />
     <ClCompile Include="src\Core\WindowTracker.cpp" />
+    <ClCompile Include="src\Instances.cpp" />
+    <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\UI\BrowserBridge.cpp" />
     <ClCompile Include="src\Data\DatabaseManager.cpp" />
+    <ClCompile Include="src\UI\TrayIcon.cpp" />
+    <ClCompile Include="src\Utils\EventBridge.cpp" />
+    <ClCompile Include="src\Utils\StartupManager.cpp" />
     <ClCompile Include="vendor\sqlite\sqlite3.c" />
     <ClCompile Include="src\UI\WebViewManager.cpp" />
-    <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\Globals.cpp" />
     <ClCompile Include="src\Window.cpp" />
     <ClCompile Include="src\Workers.cpp" />
-    <ClCompile Include="src\Instances.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\AI\AIClassifierTask.hpp" />
     <ClInclude Include="include\AI\GeminiService.hpp" />
     <ClInclude Include="include\Core\WindowTracker.hpp" />
     <ClInclude Include="include\UI\BrowserBridge.hpp" />
+    <ClInclude Include="include\UI\TrayIcon.hpp" />
+    <ClInclude Include="include\Utils\EventBridge.hpp" />
     <ClInclude Include="include\Utils\EventQueue.hpp" />
     <ClInclude Include="include\Data\DatabaseManager.hpp" />
+    <ClInclude Include="include\Utils\StartupManager.hpp" />
     <ClInclude Include="vendor\sqlite\sqlite3.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="dashboard_pro.html" />
+    <None Include="eventbridge_example.js" />
+    <None Include="EventBridge_README.md" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
@@ -94,6 +104,9 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(SolutionDir)x64\DebugBuild\</OutDir>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>

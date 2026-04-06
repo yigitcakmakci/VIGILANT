@@ -1,6 +1,8 @@
 #include "Data/DatabaseManager.hpp"
 #include <iostream>
 
+using json = nlohmann::json;
+
 DatabaseManager::DatabaseManager(const std::string& dbName) : db(nullptr) {
     if (sqlite3_open(dbName.c_str(), &db) != SQLITE_OK) {
         std::cerr << "VERITABANI ACILAMADI: " << sqlite3_errmsg(db) << std::endl;
@@ -287,4 +289,122 @@ bool DatabaseManager::saveAILabels(const std::string& process, const std::string
     }
     sqlite3_finalize(stmt);
     return false;
+}
+
+json DatabaseManager::getDashboardSummaryJson() {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    json result;
+
+    // ── 1. Bugünkü Toplam Verimlilik Skoru ──
+    {
+        sqlite3_stmt* stmt;
+        const char* sql =
+            "SELECT "
+            "  SUM(COALESCE(k.SCORE, 0) * a.DURATION) AS weighted_score, "
+            "  SUM(a.DURATION) AS total_duration "
+            "FROM Activities a "
+            "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
+            "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
+            "WHERE DATE(a.TIMESTAMP) = DATE('now');";
+
+        float productivity = 0.0f;
+        float totalScore = 0.0f;
+        int totalDuration = 0;
+
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                totalScore = (float)sqlite3_column_int(stmt, 0);
+                totalDuration = sqlite3_column_int(stmt, 1);
+                if (totalDuration > 0) {
+                    productivity = (totalScore + 10.0f * totalDuration) / (20.0f * totalDuration) * 100.0f;
+                    productivity = std::max(0.0f, std::min(100.0f, productivity));
+                }
+            }
+            sqlite3_finalize(stmt);
+        }
+
+        result["productivity"] = {
+            {"percentage", std::round(productivity * 10.0f) / 10.0f},
+            {"weightedScore", totalScore},
+            {"totalDurationSec", totalDuration}
+        };
+    }
+
+    // ── 2. En Çok Vakit Geçirilen Top 3 Uygulama ──
+    {
+        sqlite3_stmt* stmt;
+        const char* sql =
+            "SELECT a.PROCESS, "
+            "  SUM(a.DURATION) AS total_sec, "
+            "  COALESCE(k.CATEGORY, 'Uncategorized') AS cat, "
+            "  COALESCE(k.SCORE, 0) AS score "
+            "FROM Activities a "
+            "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
+            "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
+            "WHERE DATE(a.TIMESTAMP) = DATE('now') "
+            "GROUP BY a.PROCESS "
+            "ORDER BY total_sec DESC "
+            "LIMIT 3;";
+
+        json topApps = json::array();
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char* proc = (const char*)sqlite3_column_text(stmt, 0);
+                int dur = sqlite3_column_int(stmt, 1);
+                const char* cat = (const char*)sqlite3_column_text(stmt, 2);
+                int sc = sqlite3_column_int(stmt, 3);
+
+                topApps.push_back({
+                    {"process", proc ? proc : "Unknown"},
+                    {"durationSec", dur},
+                    {"category", cat ? cat : "Uncategorized"},
+                    {"score", sc}
+                });
+            }
+            sqlite3_finalize(stmt);
+        }
+        result["topApps"] = topApps;
+    }
+
+    // ── 3. Verimli / Verimsiz / Nötr Süre Oranları ──
+    {
+        sqlite3_stmt* stmt;
+        const char* sql =
+            "SELECT "
+            "  SUM(CASE WHEN COALESCE(k.SCORE, 0) > 0  THEN a.DURATION ELSE 0 END) AS productive, "
+            "  SUM(CASE WHEN COALESCE(k.SCORE, 0) < 0  THEN a.DURATION ELSE 0 END) AS unproductive, "
+            "  SUM(CASE WHEN COALESCE(k.SCORE, 0) = 0  THEN a.DURATION ELSE 0 END) AS neutral, "
+            "  SUM(a.DURATION) AS total "
+            "FROM Activities a "
+            "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
+            "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
+            "WHERE DATE(a.TIMESTAMP) = DATE('now');";
+
+        int productive = 0, unproductive = 0, neutral = 0, total = 0;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                productive   = sqlite3_column_int(stmt, 0);
+                unproductive = sqlite3_column_int(stmt, 1);
+                neutral      = sqlite3_column_int(stmt, 2);
+                total        = sqlite3_column_int(stmt, 3);
+            }
+            sqlite3_finalize(stmt);
+        }
+
+        float prodPct   = total > 0 ? (float)productive   / total * 100.0f : 0.0f;
+        float unprodPct = total > 0 ? (float)unproductive  / total * 100.0f : 0.0f;
+        float neutPct   = total > 0 ? (float)neutral       / total * 100.0f : 0.0f;
+
+        result["timeBreakdown"] = {
+            {"productiveSec",   productive},
+            {"unproductiveSec", unproductive},
+            {"neutralSec",      neutral},
+            {"totalSec",        total},
+            {"productivePct",   std::round(prodPct   * 10.0f) / 10.0f},
+            {"unproductivePct", std::round(unprodPct * 10.0f) / 10.0f},
+            {"neutralPct",      std::round(neutPct   * 10.0f) / 10.0f}
+        };
+    }
+
+    return result;
 }

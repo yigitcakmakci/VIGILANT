@@ -34,6 +34,7 @@
             },
             getActivityLogs: function(limit) { return this._request('getActivityLogs', {limit: limit || 50}); },
             getProductivityData: function() { return this._request('getProductivityData'); },
+            getDashboardSummary: function() { return this._request('getDashboardSummary'); },
             categorizeWithAI: function() { return this._request('categorizeWithAI'); }
         };
     </script>
@@ -318,6 +319,28 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Top Apps Today -->
+                    <div class="glass-card ai-card">
+                        <div class="ai-header">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                            <h3>Top Apps Today</h3>
+                        </div>
+                        <div id="topAppsContainer" style="padding:4px 0">
+                            <p style="color:rgba(255,255,255,.3);font-size:13px;padding:12px 0">Loading...</p>
+                        </div>
+                    </div>
+
+                    <!-- Time Breakdown -->
+                    <div class="glass-card ai-card">
+                        <div class="ai-header">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                            <h3>Time Breakdown</h3>
+                        </div>
+                        <div id="timeBreakdownContainer" style="padding:4px 0">
+                            <p style="color:rgba(255,255,255,.3);font-size:13px;padding:12px 0">Loading...</p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </main>
@@ -426,12 +449,78 @@
             }
         }
 
+        function updateDashboardSummary(data) {
+            if (!data) return;
+
+            // Top Apps
+            var topEl = document.getElementById('topAppsContainer');
+            if (data.topApps && data.topApps.length > 0) {
+                var html = '';
+                var medals = ['🥇', '🥈', '🥉'];
+                for (var i = 0; i < data.topApps.length; i++) {
+                    var app = data.topApps[i];
+                    var icon = getAppIcon(app.process);
+                    var scoreColor = app.score > 0 ? '#34d399' : (app.score < 0 ? '#fbbf24' : 'rgba(255,255,255,.4)');
+                    html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)">';
+                    html += '<span style="font-size:16px">' + medals[i] + '</span>';
+                    html += '<span style="font-size:18px">' + icon + '</span>';
+                    html += '<div style="flex:1;min-width:0">';
+                    html += '<div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + app.process.replace('.exe', '') + '</div>';
+                    html += '<div style="font-size:11px;color:rgba(255,255,255,.4)">' + (app.category || 'Uncategorized') + '</div>';
+                    html += '</div>';
+                    html += '<div style="text-align:right">';
+                    html += '<div style="font-size:13px;font-weight:600;color:#22d3ee">' + formatDuration(app.durationSec) + '</div>';
+                    html += '<div style="font-size:11px;color:' + scoreColor + '">' + (app.score > 0 ? '+' : '') + app.score + ' pts</div>';
+                    html += '</div></div>';
+                }
+                topEl.innerHTML = html;
+            } else {
+                topEl.innerHTML = '<p style="color:rgba(255,255,255,.3);font-size:13px;padding:12px 0">No app data yet</p>';
+            }
+
+            // Time Breakdown
+            var tbEl = document.getElementById('timeBreakdownContainer');
+            if (data.timeBreakdown && data.timeBreakdown.totalSec > 0) {
+                var tb = data.timeBreakdown;
+                var html = '';
+
+                // Bar chart
+                html += '<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin:8px 0 12px">';
+                html += '<div style="width:' + tb.productivePct + '%;background:#34d399"></div>';
+                html += '<div style="width:' + tb.neutralPct + '%;background:rgba(255,255,255,.15)"></div>';
+                html += '<div style="width:' + tb.unproductivePct + '%;background:#fbbf24"></div>';
+                html += '</div>';
+
+                // Legend rows
+                var rows = [
+                    {label: 'Productive', sec: tb.productiveSec, pct: tb.productivePct, color: '#34d399'},
+                    {label: 'Neutral', sec: tb.neutralSec, pct: tb.neutralPct, color: 'rgba(255,255,255,.4)'},
+                    {label: 'Unproductive', sec: tb.unproductiveSec, pct: tb.unproductivePct, color: '#fbbf24'}
+                ];
+                for (var i = 0; i < rows.length; i++) {
+                    var r = rows[i];
+                    html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;font-size:13px">';
+                    html += '<div style="display:flex;align-items:center;gap:8px">';
+                    html += '<span style="width:8px;height:8px;border-radius:50%;background:' + r.color + ';display:inline-block"></span>';
+                    html += '<span>' + r.label + '</span>';
+                    html += '</div>';
+                    html += '<span style="color:' + r.color + ';font-weight:600">' + formatDuration(r.sec) + ' (' + r.pct + '%)</span>';
+                    html += '</div>';
+                }
+                tbEl.innerHTML = html;
+            } else {
+                tbEl.innerHTML = '<p style="color:rgba(255,255,255,.3);font-size:13px;padding:12px 0">No time data yet</p>';
+            }
+        }
+
         async function refreshData() {
             try {
                 var logsResp = await window.dashboardAPI.getActivityLogs(50);
                 updateActivityList(logsResp);
                 var prodResp = await window.dashboardAPI.getProductivityData();
                 updateMetrics(prodResp);
+                var summaryResp = await window.dashboardAPI.getDashboardSummary();
+                updateDashboardSummary(summaryResp);
             } catch (e) {
                 console.error('Refresh error:', e);
             }

@@ -144,8 +144,9 @@ bool WebViewManager::Initialize() {
                                 OutputDebugStringW(L"[WebViewManager] Settings configured (DevTools + AcceleratorKeys enabled)\n");
                             }
 
-                            // Set initial bounds
-                            RECT bounds = { 0, 0, 1400, 900 };
+                            // Set initial bounds from actual client area
+                            RECT bounds;
+                            GetClientRect(pThis->m_hWnd, &bounds);
                             pThis->m_controller->put_Bounds(bounds);
                             OutputDebugStringW(L"[WebViewManager] Bounds set\n");
 
@@ -311,9 +312,9 @@ void WebViewManager::SetupMessageHandler() {
         m_messageHandlerSetup = true;
         OutputDebugStringW(L"[WebViewManager::SetupMessageHandler] Message handler initialized successfully\n");
     } 
-    catch (const std::exception& e) {
+    catch (const std::exception&) {
         OutputDebugStringW(L"[WebViewManager::SetupMessageHandler] std::exception caught\n");
-    } 
+    }
     catch (...) {
         OutputDebugStringW(L"[WebViewManager::SetupMessageHandler] Unknown exception caught\n");
     }
@@ -344,7 +345,12 @@ std::string WebViewManager::HandleMessage(const std::string& message) {
             }
         }
 
-        if (message.find("getActivityLogs") != std::string::npos) {
+        if (message.find("getDashboardSummary") != std::string::npos) {
+            auto summaryJson = g_Vault.getDashboardSummaryJson();
+            if (!requestId.empty()) summaryJson["requestId"] = requestId;
+            response = summaryJson.dump();
+        }
+        else if (message.find("getActivityLogs") != std::string::npos) {
             auto logs = g_Vault.getRecentLogs(50);
 
             response = "{\"logs\":[";

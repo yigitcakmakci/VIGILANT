@@ -7,6 +7,7 @@
 #include <mutex>
 #include "sqlite3.h"
 #include "Utils/EventQueue.hpp"
+#include "Utils/json.hpp"
 
 // Geçmiş kayıtları ekrana basmak için kullanılan yapı
 struct ActivityLog {
@@ -45,6 +46,9 @@ public:
     float calculateDailyProductivity();
     float calculateTodaysTotalScore();
     int getTodaysTotalDuration();
+
+    // Dashboard Özet Verisi (bugünkü toplam skor, top 3 uygulama, verimli/verimsiz oran)
+    nlohmann::json getDashboardSummaryJson();
 };
 
 #endif
