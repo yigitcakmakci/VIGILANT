@@ -1,4 +1,4 @@
-#include "DatabaseManager.hpp"
+#include "Data/DatabaseManager.hpp"
 #include <iostream>
 
 DatabaseManager::DatabaseManager(const std::string& dbName) : db(nullptr) {
@@ -157,6 +157,33 @@ std::vector<ActivityLog> DatabaseManager::getRecentLogs(int limit) {
     return logs;
 }
 
+std::vector<ActivityLog> DatabaseManager::getUncategorizedLogs() {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    std::vector<ActivityLog> logs;
+    const char* sql =
+        "SELECT DISTINCT a.PROCESS, a.TITLE, 'Uncategorized' as CATEGORY, 0 as SCORE, a.DURATION "
+        "FROM Activities a "
+        "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
+        "AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
+        "WHERE k.CATEGORY IS NULL "
+        "LIMIT 1000;";
+
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            ActivityLog log;
+            log.process = (const char*)sqlite3_column_text(stmt, 0);
+            log.title = (const char*)sqlite3_column_text(stmt, 1);
+            log.category = "Uncategorized";
+            log.score = 0;
+            log.duration = sqlite3_column_int(stmt, 4);
+            logs.push_back(log);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return logs;
+}
+
 std::map<std::string, float> DatabaseManager::getCategoryDistribution() {
     std::lock_guard<std::mutex> lock(db_mutex);
     std::map<std::string, float> stats;
@@ -176,4 +203,103 @@ std::map<std::string, float> DatabaseManager::getCategoryDistribution() {
         sqlite3_finalize(stmt);
     }
     return stats;
+}
+
+float DatabaseManager::calculateDailyProductivity() {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    const char* sql =
+        "SELECT SUM(COALESCE(k.SCORE, 0) * a.DURATION) as total_score, SUM(a.DURATION) as total_duration "
+        "FROM Activities a "
+        "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
+        "AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
+        "WHERE DATE(a.TIMESTAMP) = DATE('now');";
+
+    sqlite3_stmt* stmt;
+    float productivity = 0.0f;
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            int total_score = sqlite3_column_int(stmt, 0);
+            int total_duration = sqlite3_column_int(stmt, 1);
+
+            if (total_duration > 0) {
+                // -10 to +10 scale, normalize to percentage (0-100)
+                // Score range: -10*duration to +10*duration
+                // Normalized: (total_score + 10*duration) / (20*duration) * 100
+                productivity = ((float)total_score + 10.0f * total_duration) / (20.0f * total_duration) * 100.0f;
+                productivity = (productivity < 0.0f) ? 0.0f : (productivity > 100.0f) ? 100.0f : productivity;
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+    return productivity;
+}
+
+float DatabaseManager::calculateTodaysTotalScore() {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    const char* sql =
+        "SELECT SUM(COALESCE(k.SCORE, 0) * a.DURATION) "
+        "FROM Activities a "
+        "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
+        "AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
+        "WHERE DATE(a.TIMESTAMP) = DATE('now');";
+
+    sqlite3_stmt* stmt;
+    float totalScore = 0.0f;
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            totalScore = (float)sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return totalScore;
+}
+
+int DatabaseManager::getTodaysTotalDuration() {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    const char* sql =
+        "SELECT SUM(a.DURATION) "
+        "FROM Activities a "
+        "WHERE DATE(a.TIMESTAMP) = DATE('now');";
+
+    sqlite3_stmt* stmt;
+    int totalDuration = 0;
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            totalDuration = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return totalDuration;
+}
+
+bool DatabaseManager::saveAILabels(const std::string& process, const std::string& title,
+                                    const std::string& category, int score)
+{
+    std::lock_guard<std::mutex> lock(db_mutex);
+    sqlite3_stmt* stmt;
+    const char* sql =
+        "INSERT OR REPLACE INTO KnowledgeBase (PROCESS, TITLE_KEYWORD, CATEGORY, SCORE) "
+        "VALUES (?, ?, ?, ?);";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, process.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, title.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, category.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 4, score);
+
+        bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+
+        if (ok) {
+            std::cout << "[DB] AI Etiketi Kaydedildi: " << process
+                      << " [" << title << "] -> " << category
+                      << " (" << score << ")" << std::endl;
+        }
+        return ok;
+    }
+    sqlite3_finalize(stmt);
+    return false;
 }

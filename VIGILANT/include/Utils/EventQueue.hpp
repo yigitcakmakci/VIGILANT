@@ -53,4 +53,7 @@ public:
     }
 };
 
+// Global instance declaration
+extern EventQueue g_EventQueue;
+
 #endif

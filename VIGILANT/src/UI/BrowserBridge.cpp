@@ -1,4 +1,4 @@
-#include "BrowserBridge.hpp"
+#include "UI/BrowserBridge.hpp"
 #include <iostream>
 
 BrowserBridge::BrowserBridge() : pAutomation(nullptr) {

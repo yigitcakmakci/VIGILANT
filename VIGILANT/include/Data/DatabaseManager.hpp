@@ -6,7 +6,7 @@
 #include <map>
 #include <mutex>
 #include "sqlite3.h"
-#include "EventQueue.hpp"
+#include "Utils/EventQueue.hpp"
 
 // Geçmiş kayıtları ekrana basmak için kullanılan yapı
 struct ActivityLog {
@@ -37,9 +37,15 @@ public:
 
     // Veri Çekme Fonksiyonları
     std::vector<ActivityLog> getRecentLogs(int limit = 15);
+    std::vector<ActivityLog> getUncategorizedLogs();
     std::map<std::string, float> getCategoryDistribution();
     std::pair<int, std::string> getScoreForActivity(const std::string& process, const std::string& title);
     std::vector<std::pair<std::string, std::string>> getUncategorizedActivities();
+
+    // Verimlilik Hesaplama
+    float calculateDailyProductivity();
+    float calculateTodaysTotalScore();
+    int getTodaysTotalDuration();
 };
 
 #endif
