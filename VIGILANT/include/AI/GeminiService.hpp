@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include "Utils/json.hpp"
 
 // AI'dan donen etiket paketi
 struct AILabel {
@@ -22,6 +23,11 @@ public:
     // Kategorize edilmemis aktiviteleri Gemini'ye gonderip etiket listesi dondurur
     std::vector<AILabel> classifyActivities(
         const std::vector<std::pair<std::string, std::string>>& activities);
+
+    // Activity Narrative: deterministic JSON ciktisi ureten Gemini cagrisi
+    // Input: {date, totalFocusMinutes, topWindows[], milestones[], commitsSummary?}
+    // Output: {headline, highlights[3], next_step, confidence, safety_notes[]}
+    nlohmann::json generateNarrative(const nlohmann::json& narrativeInput);
 
 private:
     std::string m_apiKey;

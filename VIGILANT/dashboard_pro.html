@@ -39,6 +39,11 @@
                         if (typeof _timerService !== 'undefined') _timerService.onIdleEnd();
                         return;
                     }
+                    // Activity Narrative: C++ backend'den gelen NarrativeUpdate
+                    if (data && data.type === 'NarrativeUpdate') {
+                        _applyNarrativeUpdate(data);
+                        // requestId icin fall-through (promise resolution)
+                    }
                     var rid = data && data.requestId != null ? String(data.requestId) : null;
                     if (rid && self._pending[rid]) {
                         self._pending[rid](data);
@@ -70,10 +75,14 @@
                 });
             },
             getOverrideRules: function() { return this._request('getOverrideRules'); },
-            getOverrideAuditLog: function() { return this._request('getOverrideAuditLog'); }
+            getOverrideAuditLog: function() { return this._request('getOverrideAuditLog'); },
+            generateNarrative: function() { return this._request('generateNarrative'); },
+            getAutostartStatus: function() { return this._request('getAutostartStatus'); },
+            setAutostart: function(enabled, method) { return this._request('setAutostart', {enabled: enabled, method: method || 'registry'}); }
         };
     </script>
     <link rel="stylesheet" href="micro-interactions.css">
+    <link rel="stylesheet" href="flow-state.css">
     <style>
         /* ── Mood Engine CSS Variables (driven by mood-engine.js) ── */
         :root {
@@ -373,9 +382,201 @@
         /* Loading */
         .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(52,211,153,.3); border-top-color: #34d399; border-radius: 50%; animation: spin .6s linear infinite; }
 
+        /* ── Portal Welcome Screen ── */
+        .portal-hero {
+            padding: 20px 28px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+            width: 100%; max-width: 560px;
+        }
+        .portal-hero::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+            background: linear-gradient(90deg, transparent, hsl(var(--mood-accent)), transparent);
+            opacity: .6; border-radius: 16px 16px 0 0;
+        }
+        .hero-status {
+            display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 16px;
+        }
+        .hero-pulse {
+            width: 10px; height: 10px; border-radius: 50%; background: #34d399;
+            box-shadow: 0 0 12px rgba(52,211,153,.5); animation: pulse 2s infinite;
+        }
+        .hero-status-text {
+            font-size: 11px; color: rgba(255,255,255,.45); text-transform: uppercase;
+            letter-spacing: .12em; font-weight: 600;
+        }
+        .hero-greeting {
+            font-size: 24px; font-weight: 600; color: rgba(255,255,255,.92);
+            line-height: 1.45; letter-spacing: -.01em;
+            max-width: 480px; margin: 0 auto;
+        }
+        .hero-sub {
+            font-size: 13px; color: rgba(255,255,255,.3); margin-top: 8px;
+        }
+
+        /* Focus Sphere */
+        .focus-sphere-container {
+            position: relative; width: 220px; height: 220px;
+            margin: 16px auto; display: flex; align-items: center; justify-content: center;
+        }
+        .sphere-glow {
+            position: absolute; inset: -50px; border-radius: 50%;
+            background: hsl(var(--mood-accent) / .10);
+            filter: blur(50px);
+            animation: spherePulse 5s ease-in-out infinite;
+            pointer-events: none;
+        }
+        @keyframes spherePulse {
+            0%, 100% { transform: scale(1); opacity: .5; }
+            50% { transform: scale(1.15); opacity: 1; }
+        }
+        .focus-ring-svg {
+            width: 100%; height: 100%; transform: rotate(-90deg);
+        }
+        .ring-bg {
+            fill: none; stroke: rgba(255,255,255,.06); stroke-width: 5;
+        }
+        .ring-progress {
+            fill: none; stroke: hsl(var(--mood-accent)); stroke-width: 5;
+            stroke-linecap: round;
+            stroke-dasharray: 534.07; stroke-dashoffset: 534.07;
+            transition: stroke-dashoffset 1.5s cubic-bezier(.4,0,.2,1), stroke 0.6s ease;
+            filter: drop-shadow(0 0 10px hsl(var(--mood-accent) / .45));
+        }
+        .sphere-content {
+            position: absolute; display: flex; flex-direction: column;
+            align-items: center; gap: 2px;
+        }
+        .sphere-label {
+            font-size: 11px; color: rgba(255,255,255,.35); text-transform: uppercase;
+            letter-spacing: .1em;
+        }
+        .sphere-score {
+            font-size: 52px; font-weight: 700; color: rgba(255,255,255,.95);
+            font-variant-numeric: tabular-nums; line-height: 1;
+        }
+        .sphere-timer {
+            display: flex; align-items: center; gap: 6px; margin-top: 10px;
+            padding: 4px 12px; border-radius: 99px;
+            background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08);
+        }
+        .sphere-timer-dot {
+            width: 5px; height: 5px; border-radius: 50%; background: #34d399;
+            animation: pulse 2s infinite;
+        }
+        .sphere-timer-text {
+            font-size: 11px; color: rgba(255,255,255,.5); font-variant-numeric: tabular-nums;
+        }
+
+        /* Daily Narrative */
+        .narrative-summary {
+            width: 100%; max-width: 480px; margin: 0 auto; padding: 24px 28px;
+        }
+        .narrative-title {
+            font-size: 13px; color: rgba(255,255,255,.4); font-weight: 500;
+            margin-bottom: 16px; text-align: center;
+            text-transform: uppercase; letter-spacing: .06em;
+        }
+        .narrative-items {
+            list-style: none; padding: 0; display: flex; flex-direction: column; gap: 10px;
+        }
+        .narrative-item {
+            display: flex; align-items: center; gap: 14px;
+            padding: 12px 16px; border-radius: 12px;
+            background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.05);
+            transition: background .2s ease;
+        }
+        .narrative-item:hover { background: rgba(255,255,255,.07); }
+        .ni-icon {
+            font-size: 18px; flex-shrink: 0; width: 36px; height: 36px;
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(255,255,255,.04); border-radius: 10px;
+        }
+        .ni-text {
+            font-size: 14px; color: rgba(255,255,255,.65); line-height: 1.5;
+        }
+
+        /* Narrative Next Step */
+        .narrative-next-step {
+            display: flex; align-items: center; gap: 12px;
+            margin-top: 14px; padding: 12px 16px; border-radius: 12px;
+            background: rgba(52,211,153,.06); border: 1px solid rgba(52,211,153,.12);
+        }
+        .narrative-next-step .ni-icon { background: rgba(52,211,153,.1); }
+        .narrative-next-step .ni-text { color: rgba(52,211,153,.85); font-size: 13px; }
+
+        /* Narrative Confidence Warning */
+        .narrative-confidence-warn {
+            display: none; align-items: center; gap: 8px;
+            margin-top: 10px; padding: 8px 14px; border-radius: 10px;
+            background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.15);
+            font-size: 12px; color: rgba(251,191,36,.8);
+            animation: pulse 2s infinite;
+        }
+        .narrative-confidence-warn.visible { display: flex; }
+
+        /* Portal Footer */
+        .portal-footer {
+            display: flex; justify-content: center; gap: 24px;
+            padding: 12px 0 8px; margin-top: auto;
+        }
+        .footer-metric {
+            display: flex; align-items: center; gap: 6px;
+            padding: 6px 14px; border-radius: 99px;
+            background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06);
+        }
+        .footer-metric svg { width: 13px; height: 13px; color: rgba(255,255,255,.25); }
+        .footer-metric-value { font-size: 11px; color: rgba(255,255,255,.55); font-weight: 500; }
+        .footer-metric-label { font-size: 10px; color: rgba(255,255,255,.25); }
+        .footer-dot {
+            width: 5px; height: 5px; border-radius: 50%; background: #34d399;
+            box-shadow: 0 0 6px rgba(52,211,153,.4);
+        }
+
+        /* Settings Page */
+        .settings-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,.05);
+        }
+        .settings-row:last-child { border-bottom: none; }
+        .settings-row-info { flex: 1; min-width: 0; }
+        .settings-row-title { font-size: 14px; color: rgba(255,255,255,.8); font-weight: 500; }
+        .settings-row-desc { font-size: 12px; color: rgba(255,255,255,.35); margin-top: 3px; }
+        .infra-tag { font-size: 10px; color: rgba(251,191,36,.6); background: rgba(251,191,36,.1); padding: 3px 8px; border-radius: 4px; white-space: nowrap; flex-shrink: 0; }
+
+        /* Toggle Switch */
+        .toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute; cursor: pointer; inset: 0;
+            background: rgba(255,255,255,.1); border-radius: 24px;
+            transition: background .3s ease;
+        }
+        .toggle-slider::before {
+            content: ''; position: absolute; width: 18px; height: 18px;
+            left: 3px; bottom: 3px; background: rgba(255,255,255,.6);
+            border-radius: 50%; transition: transform .3s ease, background .3s ease;
+        }
+        .toggle-switch input:checked + .toggle-slider { background: rgba(52,211,153,.3); }
+        .toggle-switch input:checked + .toggle-slider::before { transform: translateX(20px); background: #34d399; }
+
+        /* Infrastructure Gap Marker */
+        .infra-gap-row {
+            border: 1px dashed rgba(251,191,36,.2) !important; border-radius: 12px;
+            padding: 14px 16px !important; margin-top: 4px;
+        }
+        .infra-gap-card {
+            padding: 20px; border: 1px dashed rgba(251,191,36,.25);
+        }
+
         @media (max-width: 1100px) {
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-            .bottom-grid { grid-template-columns: 1fr; }
+            .portal-footer { gap: 12px; flex-wrap: wrap; }
+            .hero-greeting { font-size: 20px; }
+            .focus-sphere-container { width: 200px; height: 200px; }
+            .narrative-summary { max-width: 100%; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
+            .bottom-grid { grid-template-columns: 1fr !important; }
         }
     </style>
 </head>
@@ -388,6 +589,10 @@
     </div>
     <div class="ambient"><div class="g1"></div><div class="g2"></div></div>
     <div class="mood-glow-orb" id="moodGlowOrb"></div>
+    <!-- Flow State overlays (driven by flow-state-controller.ts) -->
+    <div class="flow-bg-tint"></div>
+    <div class="flow-glow-orb flow-glow-orb--breathing"></div>
+    <div class="flow-overlay"></div>
     <div class="dark-layer"></div>
     <div class="mood-vignette" id="moodVignette"></div>
     <div class="app">
@@ -416,192 +621,109 @@
             <div class="sidebar-avatar">V</div>
         </aside>
 
-        <!-- Main Content: Dashboard -->
-        <main class="main page" id="page-dashboard" data-page="dashboard">
-            <!-- Header -->
-            <div class="header">
-                <div>
-                    <div class="badges">
-                        <div class="badge">
-                            <span class="badge-dot" style="background:#34d399"></span>
-                            <span class="badge-label">System Active</span>
-                        </div>
-                        <div class="badge" id="aiBadge">
-                            <span class="badge-dot" style="background:#22d3ee"></span>
-                            <span class="badge-label">AI Analyzing</span>
-                        </div>
-                        <div class="mood-badge" id="moodBadge">
-                            <span class="mood-dot"></span>
-                            <span class="mood-label">Mood</span>
-                            <span class="mood-value" id="moodScoreValue">0.0</span>
-                        </div>
+        <!-- Portal Welcome Screen -->
+        <main class="main page" id="page-dashboard" data-page="dashboard" style="align-items:center;padding-top:2vh">
+            <!-- Hero Identity -->
+            <div class="portal-hero glass-card">
+                <div class="hero-status">
+                    <span class="hero-pulse"></span>
+                    <span class="hero-status-text">Vigilant Aktif</span>
+                    <div class="mood-badge" id="moodBadge">
+                        <span class="mood-dot"></span>
+                        <span class="mood-label">Mood</span>
+                        <span class="mood-value" id="moodScoreValue">0.0</span>
                     </div>
-                    <h1>VIGILANT Active</h1>
-                    <p class="header-sub" id="headerDate">Analyzing Focus Flow</p>
                 </div>
-                <button class="glass-card btn-today" onclick="refreshData()">
-                    Today
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-                </button>
+                <h1 class="hero-greeting" id="heroGreeting">Merhaba, izlemeye başlıyoruz...</h1>
+                <p class="hero-sub" id="headerDate">Yükleniyor...</p>
             </div>
 
-            <!-- Stats Cards -->
-            <div class="stats-grid">
-                <div class="glass-card stat-card">
-                    <p class="stat-label">Focus Score</p>
-                    <p class="stat-value text-emerald" id="focusScore">--</p>
-                </div>
-                <div class="glass-card stat-card">
-                    <p class="stat-label">Deep Work</p>
-                    <p class="stat-value text-cyan" id="deepWork">--</p>
-                </div>
-                <div class="glass-card stat-card">
-                    <p class="stat-label">Distractions</p>
-                    <p class="stat-value text-amber" id="distractions">--</p>
-                </div>
-                <div class="glass-card stat-card">
-                    <p class="stat-label">Activities</p>
-                    <p class="stat-value text-emerald" id="activityCount">--</p>
+            <!-- Focus Sphere -->
+            <div class="focus-sphere-container">
+                <div class="sphere-glow" id="sphereGlow"></div>
+                <svg class="focus-ring-svg" viewBox="0 0 200 200">
+                    <circle class="ring-bg" cx="100" cy="100" r="85" />
+                    <circle class="ring-progress" id="ringProgress" cx="100" cy="100" r="85" />
+                </svg>
+                <div class="sphere-content">
+                    <span class="sphere-label">Odak Skoru</span>
+                    <span class="sphere-score" id="focusScore">--</span>
+                    <div class="sphere-timer">
+                        <span class="sphere-timer-dot"></span>
+                        <span class="sphere-timer-text" id="live-timer-elapsed">0:00</span>
+                        <span class="sphere-timer-text" style="opacity:.4" id="live-timer-app">—</span>
+                    </div>
                 </div>
             </div>
 
-            <!-- Live Timer Widget -->
-            <div class="glass-card live-timer-card">
-                <div class="live-timer-icon">
+            <!-- Daily Narrative -->
+            <div class="narrative-summary glass-card">
+                <h2 class="narrative-title" id="narrativeHeadline">Bugünün Özeti</h2>
+                <ul class="narrative-items">
+                    <li class="narrative-item">
+                        <span class="ni-icon">🧠</span>
+                        <span class="ni-text" id="niDeepWork">Veri bekleniyor...</span>
+                    </li>
+                    <li class="narrative-item">
+                        <span class="ni-icon">☕</span>
+                        <span class="ni-text" id="niDistraction">Veri bekleniyor...</span>
+                    </li>
+                    <li class="narrative-item">
+                        <span class="ni-icon">🎯</span>
+                        <span class="ni-text" id="niGoal">Veri bekleniyor...</span>
+                    </li>
+                </ul>
+                <div class="narrative-next-step" id="narrativeNextStep" style="display:none">
+                    <span class="ni-icon">🚀</span>
+                    <span class="ni-text" id="niNextStep"></span>
+                </div>
+                <div class="narrative-confidence-warn" id="narrativeConfWarn">
+                    <span>⚠</span>
+                    <span>Analiz ediliyor... Güven skoru düşük, veriler netleştikçe iyileşecek.</span>
+                </div>
+                <div style="text-align:center;margin-top:14px">
+                    <button class="narrative-btn" id="narrativeGenBtn" onclick="_requestNarrative()">AI Özet Oluştur</button>
+                </div>
+            </div>
+
+            <!-- Minimalist Footer -->
+            <div class="portal-footer">
+                <div class="footer-metric">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    <span class="footer-dot"></span>
+                    <span class="footer-metric-value" id="footerUptime">--</span>
+                    <span class="footer-metric-label">Uptime</span>
                 </div>
-                <div class="live-timer-body">
-                    <div class="live-timer-elapsed" id="live-timer-elapsed">0:00</div>
-                    <div class="live-timer-app" id="live-timer-app">—</div>
+                <div class="footer-metric">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    <span class="footer-dot"></span>
+                    <span class="footer-metric-value" id="footerSync">Synced</span>
+                    <span class="footer-metric-label">Sync</span>
                 </div>
-                <span class="live-timer-idle-badge" id="live-timer-idle">IDLE</span>
+                <div class="footer-metric">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93"/><circle cx="12" cy="14" r="4"/></svg>
+                    <span class="footer-dot"></span>
+                    <span class="footer-metric-value" id="footerAI">Active</span>
+                    <span class="footer-metric-label">AI</span>
+                </div>
             </div>
 
-            <!-- Bottom Grid -->
-            <div class="bottom-grid">
-                <!-- Chart / Activity Timeline -->
-                <div class="glass-card chart-card">
-                    <div class="chart-header">
-                        <div>
-                            <h3 class="chart-title">Recent Activity</h3>
-                            <p class="chart-sub">Live tracking feed</p>
-                        </div>
-                        <div class="chart-legend">
-                            <span class="legend-item"><span class="legend-line" style="background:#34d399"></span> Productive</span>
-                            <span class="legend-item"><span class="legend-line" style="background:#fbbf24"></span> Distraction</span>
-                        </div>
-                    </div>
-                    <div id="activityTimeline">
-                        <!-- Skeleton loading state (replaced by JS on data arrival) -->
-                        <div id="activitySkeleton" style="padding:4px 0"></div>
-                    </div>
-                </div>
-
-                <!-- Right Column -->
-                <div class="right-col">
-                    <!-- Active App Card -->
-                    <div class="glass-card active-app-card" id="activeAppCard">
-                        <div class="aac-header">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                            <h3>Currently Active</h3>
-                            <span class="aac-pulse"></span>
-                        </div>
-                        <div class="aac-body">
-                            <div class="aac-icon" id="aacIcon"><span class="aac-emoji">💻</span></div>
-                            <div class="aac-info">
-                                <p class="aac-name" id="aacName">Waiting...</p>
-                                <p class="aac-title" id="aacTitle">(No title)</p>
-                            </div>
-                        </div>
-                        <div class="aac-footer">
-                            <div class="aac-duration">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                                <span class="aac-duration-val" id="aacDuration">00:00</span>
-                            </div>
-                            <span class="aac-badge neutral" id="aacCategory">Uncategorized</span>
-                        </div>
-                        <div class="tracked-stats" style="margin-top:14px">
-                            <div class="tracked-stat">
-                                <div class="tracked-stat-label">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.3)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                                    <span>Session</span>
-                                </div>
-                                <p class="tracked-stat-value" id="sessionTime">--</p>
-                            </div>
-                            <div class="tracked-stat">
-                                <div class="tracked-stat-label">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="rgba(52,211,153,.6)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-                                    <span>Focus</span>
-                                </div>
-                                <p class="tracked-stat-value text-emerald" id="currentFocus">--</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- AI Insights -->
-                    <div class="glass-card ai-card">
-                        <div class="ai-header">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93"/><path d="M8.24 9.93A4 4 0 0 1 8 6a4 4 0 0 1 4-4"/><path d="M12 18v4"/><path d="M8 22h8"/><circle cx="12" cy="14" r="4"/></svg>
-                            <h3>AI Insights</h3>
-                            <span class="ai-live" id="aiLive">Live</span>
-                        </div>
-                        <div class="ai-insights" id="aiInsights">
-                            <div class="insight-item" onclick="sendToAI()" style="cursor:pointer">
-                                <div class="insight-icon" style="background:rgba(52,211,153,.1)">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-                                </div>
-                                <p class="insight-text">Click to run AI categorization on uncategorized activities.</p>
-                            </div>
-                            <div class="insight-item">
-                                <div class="insight-icon" style="background:rgba(251,191,36,.1)">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                                </div>
-                                <p class="insight-text" id="insightDistractions">Analyzing distraction patterns...</p>
-                            </div>
-                            <div class="insight-item">
-                                <div class="insight-icon" style="background:rgba(34,211,238,.1)">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="#22d3ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
-                                </div>
-                                <p class="insight-text" id="insightFlow">Calculating productivity flow...</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Session History -->
-                    <div class="glass-card session-history-card hover-lift">
-                        <div class="session-history-title">Session History</div>
-                        <div id="session-history"></div>
-                    </div>
-
-                    <!-- Gemini Daily Narrative -->
-                    <div class="glass-card narrative-card hover-lift">
-                        <div class="narrative-header">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93"/><path d="M8.24 9.93A4 4 0 0 1 8 6a4 4 0 0 1 4-4"/><path d="M12 18v4"/><path d="M8 22h8"/><circle cx="12" cy="14" r="4"/></svg>
-                            <h3>Daily Narrative</h3>
-                            <button class="narrative-btn" id="narrativeBtn" onclick="_generateNarrative()">Generate</button>
-                        </div>
-                        <p class="narrative-text" id="narrativeText">Click "Generate" to get an AI-powered summary of your day.</p>
-                        <ul class="narrative-insights" id="narrativeInsights"></ul>
-                    </div>
-
-                    <!-- Top Apps Today -->
-                    <div class="glass-card ai-card hover-lift">
-                        <div class="ai-header">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-                            <h3>Top Apps Today</h3>
-                        </div>
-                        <div id="topAppsContainer" style="padding:4px 0"></div>
-                    </div>
-
-                    <!-- Time Breakdown -->
-                    <div class="glass-card ai-card hover-lift">
-                        <div class="ai-header">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                            <h3>Time Breakdown</h3>
-                        </div>
-                        <div id="timeBreakdownContainer" style="padding:4px 0"></div>
-                    </div>
-                </div>
+            <!-- Hidden elements for JS compatibility -->
+            <div style="display:none">
+                <span id="live-timer-idle">IDLE</span>
+                <div id="session-history"></div>
+                <span id="activityCount">0</span>
+                <span id="deepWork">--</span>
+                <span id="distractions">0</span>
+                <span id="currentFocus">--</span>
+                <div id="activityTimeline"></div>
+                <div id="topAppsContainer"></div>
+                <div id="timeBreakdownContainer"></div>
+                <span id="insightDistractions"></span>
+                <span id="insightFlow"></span>
+                <span id="aiLive">Live</span>
+                <span id="sessionTime">--</span>
+                <span id="aiBadge"></span>
             </div>
         </main>
 
@@ -616,13 +738,60 @@
                         </div>
                     </div>
                     <h1>Activity</h1>
-                    <p class="header-sub">Detailed activity timeline &amp; application usage</p>
+                    <p class="header-sub">Detaylı aktivite zaman çizelgesi ve uygulama kullanımı</p>
                 </div>
             </div>
-            <div class="glass-card" style="padding:48px;text-align:center;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(52,211,153,.4)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                <h2 style="color:rgba(255,255,255,.6);font-size:18px;font-weight:500">Activity Timeline</h2>
-                <p style="color:rgba(255,255,255,.3);font-size:14px;max-width:400px">Detailed view of all tracked activities, application usage durations, and timeline visualization will appear here.</p>
+            <div class="stats-grid" style="grid-template-columns:repeat(4,1fr)">
+                <div class="glass-card stat-card hover-lift">
+                    <div class="stat-label">Toplam Süre</div>
+                    <div class="stat-value text-emerald" id="actTotalTime">--</div>
+                </div>
+                <div class="glass-card stat-card hover-lift">
+                    <div class="stat-label">Aktivite Sayısı</div>
+                    <div class="stat-value text-cyan" id="actTotalCount">--</div>
+                </div>
+                <div class="glass-card stat-card hover-lift">
+                    <div class="stat-label">Verimlilik</div>
+                    <div class="stat-value text-emerald" id="actProductivity">--%</div>
+                </div>
+                <div class="glass-card stat-card hover-lift">
+                    <div class="stat-label">En Aktif Uygulama</div>
+                    <div class="stat-value text-amber" id="actTopApp" style="font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">--</div>
+                </div>
+            </div>
+            <div class="bottom-grid" style="flex:1;min-height:0">
+                <div class="glass-card chart-card" style="min-height:0;overflow:hidden">
+                    <div class="chart-header">
+                        <div>
+                            <div class="chart-title">Aktivite Zaman Çizelgesi</div>
+                            <div class="chart-sub" id="actTimelineCount">0 kayıt</div>
+                        </div>
+                        <button class="narrative-btn" onclick="loadActivityPage()">⟳ Yenile</button>
+                    </div>
+                    <div class="activity-list" id="actTimeline" style="flex:1;overflow-y:auto">
+                        <div style="text-align:center;padding:32px;color:rgba(255,255,255,.3)">Yükleniyor...</div>
+                    </div>
+                </div>
+                <div class="right-col" style="min-height:0;overflow-y:auto">
+                    <div class="glass-card" style="padding:20px">
+                        <div class="tracked-header">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+                            <h3>En Çok Kullanılan</h3>
+                        </div>
+                        <div id="actTopApps" style="display:flex;flex-direction:column;gap:10px">
+                            <div style="text-align:center;padding:16px;color:rgba(255,255,255,.3);font-size:13px">Yükleniyor...</div>
+                        </div>
+                    </div>
+                    <div class="glass-card" style="padding:20px">
+                        <div class="tracked-header">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
+                            <h3>Kategori Dağılımı</h3>
+                        </div>
+                        <div id="actCategoryDist" style="display:flex;flex-direction:column;gap:8px">
+                            <div style="text-align:center;padding:16px;color:rgba(255,255,255,.3);font-size:13px">Yükleniyor...</div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </main>
 
@@ -633,17 +802,65 @@
                     <div class="badges">
                         <div class="badge">
                             <span class="badge-dot" style="background:#22d3ee"></span>
-                            <span class="badge-label">AI Engine</span>
+                            <span class="badge-label" id="aiBadgeLabel">AI Engine</span>
                         </div>
                     </div>
                     <h1>AI Insights</h1>
-                    <p class="header-sub">AI-powered productivity analysis &amp; recommendations</p>
+                    <p class="header-sub">AI destekli verimlilik analizi ve öneriler</p>
+                </div>
+                <button class="narrative-btn" style="align-self:center;padding:10px 20px;font-size:13px" onclick="triggerAICategorize()">
+                    <span id="aiCategorizeText">🧠 Kategorize Et</span>
+                </button>
+            </div>
+            <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+                <div class="glass-card stat-card hover-lift">
+                    <div class="stat-label">Kategorize Edilen</div>
+                    <div class="stat-value text-cyan" id="aiStatCategorized">--</div>
+                </div>
+                <div class="glass-card stat-card hover-lift">
+                    <div class="stat-label">Override Kuralı</div>
+                    <div class="stat-value text-amber" id="aiStatRules">--</div>
+                </div>
+                <div class="glass-card stat-card hover-lift">
+                    <div class="stat-label">AI Durumu</div>
+                    <div class="stat-value" style="font-size:16px" id="aiStatStatus">
+                        <span style="color:rgba(255,255,255,.4)">Kontrol edilmedi</span>
+                    </div>
                 </div>
             </div>
-            <div class="glass-card" style="padding:48px;text-align:center;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(34,211,238,.4)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93"/><path d="M8.24 9.93A4 4 0 0 1 8 6a4 4 0 0 1 4-4"/><path d="M12 18v4"/><path d="M8 22h8"/><circle cx="12" cy="14" r="4"/></svg>
-                <h2 style="color:rgba(255,255,255,.6);font-size:18px;font-weight:500">AI Insights</h2>
-                <p style="color:rgba(255,255,255,.3);font-size:14px;max-width:400px">AI-driven categorization results, productivity patterns, focus recommendations, and behavioral insights will appear here.</p>
+            <div class="bottom-grid" style="flex:1;min-height:0">
+                <div class="glass-card chart-card" style="min-height:0;overflow:hidden">
+                    <div class="chart-header">
+                        <div>
+                            <div class="chart-title">Override Kuralları</div>
+                            <div class="chart-sub" id="aiRulesCount">Kullanıcı tarafından tanımlanan kategori kuralları</div>
+                        </div>
+                    </div>
+                    <div class="activity-list" id="aiRulesList" style="flex:1;overflow-y:auto">
+                        <div style="text-align:center;padding:32px;color:rgba(255,255,255,.3);font-size:13px">Yükleniyor...</div>
+                    </div>
+                </div>
+                <div class="right-col" style="min-height:0;overflow-y:auto">
+                    <div class="glass-card" style="padding:20px">
+                        <div class="tracked-header">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                            <h3>Değişiklik Geçmişi</h3>
+                        </div>
+                        <div id="aiAuditLog" style="display:flex;flex-direction:column;gap:4px;max-height:400px;overflow-y:auto">
+                            <div style="text-align:center;padding:16px;color:rgba(255,255,255,.3);font-size:13px">Yükleniyor...</div>
+                        </div>
+                    </div>
+                    <div class="glass-card" style="padding:20px">
+                        <div class="tracked-header">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93"/><circle cx="12" cy="14" r="4"/></svg>
+                            <h3>AI Narrative</h3>
+                        </div>
+                        <p style="font-size:13px;color:rgba(255,255,255,.45);margin-bottom:12px">Gemini AI ile günlük aktivite özeti oluştur</p>
+                        <button class="narrative-btn" style="width:100%;padding:10px;font-size:13px" onclick="_requestNarrative();navigateTo('dashboard')">
+                            ✨ AI Özet Oluştur & Dashboard'da Gör
+                        </button>
+                    </div>
+                </div>
             </div>
         </main>
 
@@ -658,13 +875,83 @@
                         </div>
                     </div>
                     <h1>History</h1>
-                    <p class="header-sub">Past sessions, daily reports &amp; trends</p>
+                    <p class="header-sub">Geçmiş oturumlar, günlük raporlar ve trendler</p>
                 </div>
             </div>
-            <div class="glass-card" style="padding:48px;text-align:center;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(167,139,250,.4)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                <h2 style="color:rgba(255,255,255,.6);font-size:18px;font-weight:500">Usage History</h2>
-                <p style="color:rgba(255,255,255,.3);font-size:14px;max-width:400px">Historical data, daily/weekly/monthly reports, productivity trends, and session archives will appear here.</p>
+            <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+                <div class="glass-card stat-card hover-lift">
+                    <div class="stat-label">Bugün Toplam</div>
+                    <div class="stat-value text-emerald" id="histTodayTotal">--</div>
+                </div>
+                <div class="glass-card stat-card hover-lift">
+                    <div class="stat-label">Verimli Süre</div>
+                    <div class="stat-value text-cyan" id="histProductive">--</div>
+                </div>
+                <div class="glass-card stat-card hover-lift">
+                    <div class="stat-label">Verimsiz Süre</div>
+                    <div class="stat-value text-amber" id="histUnproductive">--</div>
+                </div>
+            </div>
+            <div class="glass-card" style="padding:20px;margin-bottom:16px">
+                <div class="tracked-header" style="margin-bottom:12px">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
+                    <h3>Bugünün Zaman Dağılımı</h3>
+                </div>
+                <div id="histTimeBar" style="display:flex;height:12px;border-radius:6px;overflow:hidden;margin-bottom:12px;background:rgba(255,255,255,.04)"></div>
+                <div id="histTimeLegend" style="display:flex;gap:20px;flex-wrap:wrap"></div>
+            </div>
+            <div class="bottom-grid" style="flex:1;min-height:0">
+                <div class="glass-card chart-card" style="min-height:0;overflow:hidden">
+                    <div class="chart-header">
+                        <div>
+                            <div class="chart-title">Bugünün Aktiviteleri</div>
+                            <div class="chart-sub" id="histLogCount">0 kayıt</div>
+                        </div>
+                    </div>
+                    <div class="activity-list" id="histActivityList" style="flex:1;overflow-y:auto">
+                        <div style="text-align:center;padding:32px;color:rgba(255,255,255,.3);font-size:13px">Yükleniyor...</div>
+                    </div>
+                </div>
+                <div class="right-col" style="min-height:0;overflow-y:auto">
+                    <div class="glass-card" style="padding:20px">
+                        <div class="tracked-header">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                            <h3>Oturum Geçmişi</h3>
+                        </div>
+                        <div id="histSessions" style="display:flex;flex-direction:column;gap:6px">
+                            <div style="text-align:center;padding:16px;color:rgba(255,255,255,.3);font-size:13px">Yükleniyor...</div>
+                        </div>
+                    </div>
+                    <!-- Infrastructure Gap Notice -->
+                    <div class="glass-card infra-gap-card">
+                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+                            <span style="font-size:18px">🚧</span>
+                            <h3 style="color:rgba(251,191,36,.8);font-size:14px;font-weight:500">Altyapı Gerekli</h3>
+                        </div>
+                        <div style="font-size:12px;color:rgba(255,255,255,.4);line-height:1.7">
+                            <p style="margin-bottom:8px">Aşağıdaki özellikler için backend altyapısı henüz mevcut değil:</p>
+                            <div style="display:flex;flex-direction:column;gap:4px">
+                                <div style="display:flex;align-items:center;gap:6px">
+                                    <span style="color:rgba(251,191,36,.6)">▸</span>
+                                    <span>Tarih seçici ile geçmiş günlerin verileri</span>
+                                </div>
+                                <div style="display:flex;align-items:center;gap:6px">
+                                    <span style="color:rgba(251,191,36,.6)">▸</span>
+                                    <span>Haftalık / Aylık trend grafikleri</span>
+                                </div>
+                                <div style="display:flex;align-items:center;gap:6px">
+                                    <span style="color:rgba(251,191,36,.6)">▸</span>
+                                    <span>Günlük özet snapshot'ları (DailySummary tablosu)</span>
+                                </div>
+                                <div style="display:flex;align-items:center;gap:6px">
+                                    <span style="color:rgba(251,191,36,.6)">▸</span>
+                                    <span>getHistoricalData(date) API endpoint'i</span>
+                                </div>
+                            </div>
+                            <p style="margin-top:10px;color:rgba(251,191,36,.5);font-size:11px">Şu an sadece bugünün verileri görüntülenebilmektedir.</p>
+                        </div>
+                    </div>
+                </div>
             </div>
         </main>
 
@@ -679,13 +966,134 @@
                         </div>
                     </div>
                     <h1>Settings</h1>
-                    <p class="header-sub">Application preferences &amp; configuration</p>
+                    <p class="header-sub">Uygulama tercihleri ve yapılandırma</p>
                 </div>
             </div>
-            <div class="glass-card" style="padding:48px;text-align:center;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(251,191,36,.4)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-                <h2 style="color:rgba(255,255,255,.6);font-size:18px;font-weight:500">Settings</h2>
-                <p style="color:rgba(255,255,255,.3);font-size:14px;max-width:400px">Tracking preferences, AI configuration, notification settings, app categorization rules, and general options will appear here.</p>
+            <div style="display:flex;flex-direction:column;gap:16px;max-width:720px">
+                <!-- General -->
+                <div class="glass-card" style="padding:24px">
+                    <h3 style="font-size:15px;color:rgba(255,255,255,.85);margin-bottom:20px;display:flex;align-items:center;gap:8px">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                        Genel
+                    </h3>
+                    <div class="settings-row">
+                        <div class="settings-row-info">
+                            <div class="settings-row-title">Windows ile Başlat</div>
+                            <div class="settings-row-desc">Bilgisayar açıldığında VIGILANT otomatik başlasın</div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:12px">
+                            <select id="settAutoMethod" class="override-select" style="font-size:12px">
+                                <option value="registry">Registry</option>
+                                <option value="taskscheduler">Task Scheduler</option>
+                            </select>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="settAutostart" onchange="toggleAutostart(this.checked)">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="settings-row infra-gap-row">
+                        <div class="settings-row-info">
+                            <div class="settings-row-title" style="color:rgba(255,255,255,.45)">Tray'e Küçült</div>
+                            <div class="settings-row-desc">Kapatma düğmesine basıldığında sistem tepsisine küçült</div>
+                        </div>
+                        <span class="infra-tag">ALTYAPI GEREKLİ</span>
+                    </div>
+                </div>
+
+                <!-- AI Configuration -->
+                <div class="glass-card" style="padding:24px">
+                    <h3 style="font-size:15px;color:rgba(255,255,255,.85);margin-bottom:20px;display:flex;align-items:center;gap:8px">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93"/><circle cx="12" cy="14" r="4"/><path d="M12 18v4"/><path d="M8 22h8"/></svg>
+                        AI Yapılandırma
+                    </h3>
+                    <div class="settings-row">
+                        <div class="settings-row-info">
+                            <div class="settings-row-title">Gemini AI Durumu</div>
+                            <div class="settings-row-desc">API anahtarı GEMINI_API_KEY ortam değişkeninden okunur</div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px">
+                            <span style="width:8px;height:8px;border-radius:50%" id="settAIDot"></span>
+                            <span style="font-size:13px;color:rgba(255,255,255,.5)" id="settAIText">Kontrol ediliyor...</span>
+                        </div>
+                    </div>
+                    <div class="settings-row infra-gap-row">
+                        <div class="settings-row-info">
+                            <div class="settings-row-title" style="color:rgba(255,255,255,.45)">API Anahtarı Girişi</div>
+                            <div class="settings-row-desc">UI üzerinden API anahtarı kaydetme (şu an ortam değişkeni gerekli)</div>
+                        </div>
+                        <span class="infra-tag">ALTYAPI GEREKLİ</span>
+                    </div>
+                </div>
+
+                <!-- Tracking Preferences -->
+                <div class="glass-card" style="padding:24px">
+                    <h3 style="font-size:15px;color:rgba(255,255,255,.85);margin-bottom:20px;display:flex;align-items:center;gap:8px">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                        İzleme Tercihleri
+                    </h3>
+                    <div class="settings-row infra-gap-row">
+                        <div class="settings-row-info">
+                            <div class="settings-row-title" style="color:rgba(255,255,255,.45)">İzleme Duraklat / Başlat</div>
+                            <div class="settings-row-desc">Tracking engine'i geçici olarak duraklatma</div>
+                        </div>
+                        <span class="infra-tag">ALTYAPI GEREKLİ</span>
+                    </div>
+                    <div class="settings-row infra-gap-row">
+                        <div class="settings-row-info">
+                            <div class="settings-row-title" style="color:rgba(255,255,255,.45)">Uygulama Hariç Tutma Listesi</div>
+                            <div class="settings-row-desc">Belirli uygulamaları izleme dışı bırakma</div>
+                        </div>
+                        <span class="infra-tag">ALTYAPI GEREKLİ</span>
+                    </div>
+                    <div class="settings-row infra-gap-row">
+                        <div class="settings-row-info">
+                            <div class="settings-row-title" style="color:rgba(255,255,255,.45)">Bildirim Ayarları</div>
+                            <div class="settings-row-desc">Verimlilik uyarıları ve mola hatırlatıcıları</div>
+                        </div>
+                        <span class="infra-tag">ALTYAPI GEREKLİ</span>
+                    </div>
+                </div>
+
+                <!-- Data Management -->
+                <div class="glass-card" style="padding:24px">
+                    <h3 style="font-size:15px;color:rgba(255,255,255,.85);margin-bottom:20px;display:flex;align-items:center;gap:8px">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                        Veri Yönetimi
+                    </h3>
+                    <div class="settings-row infra-gap-row">
+                        <div class="settings-row-info">
+                            <div class="settings-row-title" style="color:rgba(255,255,255,.45)">Veri Dışa Aktarma (CSV / JSON)</div>
+                            <div class="settings-row-desc">Aktivite verilerini dışa aktarma</div>
+                        </div>
+                        <span class="infra-tag">ALTYAPI GEREKLİ</span>
+                    </div>
+                    <div class="settings-row infra-gap-row">
+                        <div class="settings-row-info">
+                            <div class="settings-row-title" style="color:rgba(255,255,255,.45)">Veritabanı Temizle</div>
+                            <div class="settings-row-desc">Tüm aktivite verilerini sil</div>
+                        </div>
+                        <span class="infra-tag">ALTYAPI GEREKLİ</span>
+                    </div>
+                </div>
+
+                <!-- About -->
+                <div class="glass-card" style="padding:24px">
+                    <h3 style="font-size:15px;color:rgba(255,255,255,.85);margin-bottom:16px;display:flex;align-items:center;gap:8px">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                        Hakkında
+                    </h3>
+                    <div style="display:flex;align-items:center;gap:16px">
+                        <div style="width:48px;height:48px;border-radius:12px;background:rgba(52,211,153,.15);border:1px solid rgba(52,211,153,.2);display:flex;align-items:center;justify-content:center">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="1.5"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </div>
+                        <div>
+                            <div style="font-size:16px;font-weight:600;color:rgba(255,255,255,.9)">VIGILANT</div>
+                            <div style="font-size:12px;color:rgba(255,255,255,.35);margin-top:2px">Productivity Tracker &bull; Desktop App</div>
+                            <div style="font-size:11px;color:rgba(255,255,255,.25);margin-top:2px">C++ / WebView2 / SQLite / Gemini AI</div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </main>
     </div>
@@ -928,6 +1336,11 @@
                     buttons[i].classList.add('active');
                 }
             }
+            // Load page-specific data
+            if (pageName === 'activity') loadActivityPage();
+            else if (pageName === 'ai-insights') loadAIInsightsPage();
+            else if (pageName === 'history') loadHistoryPage();
+            else if (pageName === 'settings') loadSettingsPage();
         }
 
         var appIcons = {
@@ -946,13 +1359,26 @@
             return h + 'h ' + (m > 0 ? m + 'm' : '');
         }
 
+        var _portalStartTime = Date.now();
+
         function getDateStr() {
-            var days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-            var months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+            var days = ['Pazar','Pazartesi','Sal\u0131','\u00c7ar\u015famba','Per\u015fembe','Cuma','Cumartesi'];
+            var months = ['Ocak','\u015eubat','Mart','Nisan','May\u0131s','Haziran','Temmuz','A\u011fustos','Eyl\u00fcl','Ekim','Kas\u0131m','Aral\u0131k'];
             var d = new Date();
-            return 'Analyzing Focus Flow \u2014 ' + days[d.getDay()] + ', ' + months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
+            var h = d.getHours();
+            var greeting = h < 6 ? 'Gece ku\u015fu' : h < 12 ? 'G\u00fcnayd\u0131n' : h < 18 ? '\u0130yi \u00e7al\u0131\u015fmalar' : '\u0130yi ak\u015famlar';
+            return greeting + ' \u2014 ' + days[d.getDay()] + ', ' + d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear();
         }
         document.getElementById('headerDate').textContent = getDateStr();
+
+        function syncSphereAtmosphere(score) {
+            var glow = document.getElementById('sphereGlow');
+            if (!glow) return;
+            var dur = score >= 70 ? 6 : score >= 40 ? 4 : 2.5;
+            glow.style.animationDuration = dur + 's';
+            var intensity = score >= 70 ? 0.14 : score >= 40 ? 0.08 : 0.05;
+            glow.style.background = 'hsl(var(--mood-accent) / ' + intensity + ')';
+        }
 
         function getCategoryColor(cat, score) {
             if (score < 0) return { dot: '#fbbf24', cls: 'negative' };
@@ -1052,32 +1478,23 @@
         }
 
         function updateActivityList(response) {
-            var el = document.getElementById('activityTimeline');
             if (!response || !response.logs || response.logs.length === 0) {
-                el.innerHTML = '<div style="text-align:center;padding:60px 0;color:rgba(255,255,255,.3)"><p>No activities recorded yet</p></div>';
-                document.getElementById('activityCount').textContent = '0';
                 _durationState.baseDurations = [];
                 _lastActivityLogs = [];
                 return;
             }
             var logs = response.logs;
             _lastActivityLogs = logs;
-            document.getElementById('activityCount').textContent = logs.length;
 
-            // Save duration state for ticker
             _durationState.baseDurations = [];
             _durationState.fetchedAt = Date.now();
             for (var i = 0; i < logs.length; i++) {
                 _durationState.baseDurations.push(logs[i].duration || 0);
             }
 
-            // Current app → push into ActiveAppStore (renderer handles DOM updates)
             var top = logs[0];
             var _topName = (top.process || '').replace('.exe', '') || 'Unknown';
 
-            // Bridge: notify timer service when the active app changes
-            // This ensures session history works even if EventBridge events
-            // haven't reached JS yet (e.g., during startup race).
             if (typeof _timerService !== 'undefined' && _timerService) {
                 var timerApp = _timerService.getState().activeApp;
                 if (timerApp !== _topName) {
@@ -1093,50 +1510,34 @@
                 durationSec: top.duration || 0,
                 startedAt: Date.now() - ((top.duration || 0) * 1000)
             });
-
-            // Distractions count
-            var distractions = 0;
-            for (var i = 0; i < logs.length; i++) { if (logs[i].score < 0) distractions++; }
-            document.getElementById('distractions').textContent = distractions;
-
-            // Build activity list
-            var html = '<div class="activity-list">';
-            var max = Math.min(logs.length, 30);
-            for (var i = 0; i < max; i++) {
-                var log = logs[i];
-                var col = getCategoryColor(log.category, log.score);
-                var source = log.source || 'seed';
-                html += '<div class="activity-row">';
-                html += '<span class="activity-dot" style="background:' + col.dot + '"></span>';
-                html += '<div class="activity-info">';
-                html += '<div class="activity-proc">' + (log.process || 'Uncategorized') + '</div>';
-                html += '<div class="activity-ttl">' + (log.title || '(No title)') + '</div>';
-                html += '</div>';
-                html += '<div class="activity-meta">';
-                html += '<div style="display:flex;align-items:center;gap:4px;justify-content:flex-end;margin-bottom:3px">';
-                html += '<span class="activity-cat ' + col.cls + '">' + (log.category || 'Uncategorized') + '</span>';
-                html += getSourceBadge(source);
-                html += '</div>';
-                html += buildOverrideSelect(log, i);
-                html += '<div class="activity-dur">' + formatDuration(log.duration) + '</div>';
-                html += '</div></div>';
-            }
-            html += '</div>';
-            el.innerHTML = html;
         }
 
         function updateMetrics(response) {
             if (!response || !response.metrics) return;
             var m = response.metrics;
             var prod = Math.round(m.productivity || 0);
-            document.getElementById('focusScore').textContent = prod + '%';
-            document.getElementById('deepWork').textContent = formatDuration(m.totalTime || 0);
-            document.getElementById('currentFocus').textContent = prod + '%';
+
+            // ── Update Focus Sphere ──
+            var focusEl = document.getElementById('focusScore');
+            if (focusEl) focusEl.textContent = prod;
+
+            var ring = document.getElementById('ringProgress');
+            if (ring) {
+                var offset = 534.07 * (1 - prod / 100);
+                ring.style.strokeDashoffset = offset;
+            }
+
+            // ── Update Hero Greeting ──
+            var greetEl = document.getElementById('heroGreeting');
+            if (greetEl) {
+                if (prod >= 80) greetEl.textContent = 'Odak modundas\u0131n reis, ak\u0131\u015f harika.';
+                else if (prod >= 60) greetEl.textContent = '\u0130yi gidiyorsun, tempoyu koru.';
+                else if (prod >= 40) greetEl.textContent = 'Biraz da\u011f\u0131ld\u0131k m\u0131? Hadi toparlanal\u0131m.';
+                else if (prod > 0) greetEl.textContent = 'Bug\u00fcn zor ge\u00e7iyor, bir nefes al.';
+                else greetEl.textContent = 'Merhaba, izlemeye ba\u015fl\u0131yoruz...';
+            }
 
             // ── Feed Mood Engine ──
-            // focusSeconds: productive deep-work time (totalTime from DB)
-            // appSwitchCount: tracked by _handleActiveAppChanged
-            // idleRatio: estimate from distraction ratio
             var totalSec = m.totalTime || 0;
             var cats = m.categories || {};
             var distTotal = 0;
@@ -1152,81 +1553,44 @@
                 idleRatio: _moodClamp(idleRatio, 0, 1)
             });
 
-            // Insights
-            var topCat = '', topVal = 0;
-            for (var k in cats) { if (cats[k] > topVal) { topVal = cats[k]; topCat = k; } }
-            if (topCat) {
-                document.getElementById('insightFlow').textContent = 'Most time spent in "' + topCat + '" (' + formatDuration(topVal) + '). Keep optimizing your workflow!';
+            // ── Update Narrative Items ──
+            var deepEl = document.getElementById('niDeepWork');
+            if (deepEl) {
+                var deepSec = Math.max(0, totalSec - distTotal);
+                deepEl.textContent = deepSec > 0 ? formatDuration(deepSec) + ' derin \u00e7al\u0131\u015fma' : 'Hen\u00fcz derin \u00e7al\u0131\u015fma kaydedilmedi';
             }
-            if (distTotal > 0) {
-                document.getElementById('insightDistractions').textContent = 'Distraction time today: ' + formatDuration(distTotal) + '. Try to minimize context switching.';
-            } else {
-                document.getElementById('insightDistractions').textContent = 'No distractions detected today. Great focus!';
+            var distEl = document.getElementById('niDistraction');
+            if (distEl) {
+                distEl.textContent = distTotal > 0 ? formatDuration(distTotal) + ' mola & sosyal medya' : 'Hi\u00e7 dikkat da\u011f\u0131n\u0131kl\u0131\u011f\u0131 yok, harika!';
             }
+            var goalEl = document.getElementById('niGoal');
+            if (goalEl) {
+                var remaining = 100 - prod;
+                if (prod >= 100) goalEl.textContent = 'G\u00fcnl\u00fck hedef tamamland\u0131! \ud83c\udf89';
+                else if (prod > 0) goalEl.textContent = 'Hedefe %' + remaining + ' kald\u0131';
+                else goalEl.textContent = 'Hedef hesaplan\u0131yor...';
+            }
+
+            // ── Sync Sphere Atmosphere ──
+            syncSphereAtmosphere(prod);
         }
 
         function updateDashboardSummary(data) {
             if (!data) return;
 
-            // Top Apps
-            var topEl = document.getElementById('topAppsContainer');
+            // Enrich narrative with top app info
             if (data.topApps && data.topApps.length > 0) {
-                var html = '';
-                var medals = ['🥇', '🥈', '🥉'];
-                for (var i = 0; i < data.topApps.length; i++) {
-                    var app = data.topApps[i];
-                    var icon = getAppIcon(app.process);
-                    var scoreColor = app.score > 0 ? '#34d399' : (app.score < 0 ? '#fbbf24' : 'rgba(255,255,255,.4)');
-                    html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)">';
-                    html += '<span style="font-size:16px">' + medals[i] + '</span>';
-                    html += '<span style="font-size:18px">' + icon + '</span>';
-                    html += '<div style="flex:1;min-width:0">';
-                    html += '<div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + app.process.replace('.exe', '') + '</div>';
-                    html += '<div style="font-size:11px;color:rgba(255,255,255,.4)">' + (app.category || 'Uncategorized') + '</div>';
-                    html += '</div>';
-                    html += '<div style="text-align:right">';
-                    html += '<div style="font-size:13px;font-weight:600;color:#22d3ee">' + formatDuration(app.durationSec) + '</div>';
-                    html += '<div style="font-size:11px;color:' + scoreColor + '">' + (app.score > 0 ? '+' : '') + app.score + ' pts</div>';
-                    html += '</div></div>';
+                var topApp = data.topApps[0];
+                var appName = (topApp.process || '').replace('.exe', '');
+                var deepEl = document.getElementById('niDeepWork');
+                if (deepEl && topApp.durationSec > 60) {
+                    deepEl.textContent = formatDuration(topApp.durationSec) + ' ' + appName + ' ile derin \u00e7al\u0131\u015fma';
                 }
-                topEl.innerHTML = html;
-            } else {
-                topEl.innerHTML = '<p style="color:rgba(255,255,255,.3);font-size:13px;padding:12px 0">No app data yet</p>';
             }
 
-            // Time Breakdown
-            var tbEl = document.getElementById('timeBreakdownContainer');
-            if (data.timeBreakdown && data.timeBreakdown.totalSec > 0) {
-                var tb = data.timeBreakdown;
-                var html = '';
-
-                // Bar chart
-                html += '<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin:8px 0 12px">';
-                html += '<div style="width:' + tb.productivePct + '%;background:#34d399"></div>';
-                html += '<div style="width:' + tb.neutralPct + '%;background:rgba(255,255,255,.15)"></div>';
-                html += '<div style="width:' + tb.unproductivePct + '%;background:#fbbf24"></div>';
-                html += '</div>';
-
-                // Legend rows
-                var rows = [
-                    {label: 'Productive', sec: tb.productiveSec, pct: tb.productivePct, color: '#34d399'},
-                    {label: 'Neutral', sec: tb.neutralSec, pct: tb.neutralPct, color: 'rgba(255,255,255,.4)'},
-                    {label: 'Unproductive', sec: tb.unproductiveSec, pct: tb.unproductivePct, color: '#fbbf24'}
-                ];
-                for (var i = 0; i < rows.length; i++) {
-                    var r = rows[i];
-                    html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;font-size:13px">';
-                    html += '<div style="display:flex;align-items:center;gap:8px">';
-                    html += '<span style="width:8px;height:8px;border-radius:50%;background:' + r.color + ';display:inline-block"></span>';
-                    html += '<span>' + r.label + '</span>';
-                    html += '</div>';
-                    html += '<span style="color:' + r.color + ';font-weight:600">' + formatDuration(r.sec) + ' (' + parseFloat(r.pct).toFixed(2) + '%)</span>';
-                    html += '</div>';
-                }
-                tbEl.innerHTML = html;
-            } else {
-                tbEl.innerHTML = '<p style="color:rgba(255,255,255,.3);font-size:13px;padding:12px 0">No time data yet</p>';
-            }
+            // Update footer sync
+            var syncEl = document.getElementById('footerSync');
+            if (syncEl) syncEl.textContent = 'Synced';
         }
 
         async function refreshData() {
@@ -1273,6 +1637,88 @@
                 live.textContent = 'Error';
             }
             setTimeout(function() { live.textContent = 'Live'; }, 3000);
+        }
+
+        // =============================================
+        // NarrativeUpdate DOM Updater (XSS-safe)
+        // =============================================
+        var _lastNarrativeData = null;
+
+        function _safeText(str) {
+            // XSS korunmasi: textContent kullan, innerHTML kullanma
+            if (typeof str !== 'string') return '';
+            return str;
+        }
+
+        function _applyNarrativeUpdate(data) {
+            if (!data || data.error) {
+                console.warn('NarrativeUpdate error:', data && data.error);
+                return;
+            }
+
+            // Ayni veri ile tekrar render yapma
+            if (_lastNarrativeData &&
+                _lastNarrativeData.headline === data.headline &&
+                JSON.stringify(_lastNarrativeData.highlights) === JSON.stringify(data.highlights)) {
+                return;
+            }
+            _lastNarrativeData = data;
+
+            // Headline -> ana baslik
+            var headlineEl = document.getElementById('narrativeHeadline');
+            if (headlineEl && data.headline) {
+                headlineEl.textContent = _safeText(data.headline);
+            }
+
+            // Highlights[3] -> 3 kart
+            var highlightIds = ['niDeepWork', 'niDistraction', 'niGoal'];
+            if (data.highlights && data.highlights.length === 3) {
+                for (var i = 0; i < 3; i++) {
+                    var el = document.getElementById(highlightIds[i]);
+                    if (el) el.textContent = _safeText(data.highlights[i]);
+                }
+            }
+
+            // Next step -> oneri kutusu
+            var nextStepEl = document.getElementById('niNextStep');
+            var nextStepContainer = document.getElementById('narrativeNextStep');
+            if (nextStepEl && nextStepContainer && data.next_step) {
+                nextStepEl.textContent = _safeText(data.next_step);
+                nextStepContainer.style.display = '';
+            }
+
+            // Confidence check -> uyari goster/gizle
+            var confWarn = document.getElementById('narrativeConfWarn');
+            if (confWarn) {
+                var conf = typeof data.confidence === 'number' ? data.confidence : 1;
+                if (conf < 0.7) {
+                    confWarn.classList.add('visible');
+                } else {
+                    confWarn.classList.remove('visible');
+                }
+            }
+
+            // Generate butonunu resetle
+            var btn = document.getElementById('narrativeGenBtn');
+            if (btn) { btn.disabled = false; btn.textContent = 'AI \u00d6zet Olu\u015ftur'; }
+        }
+
+        function _requestNarrative() {
+            var btn = document.getElementById('narrativeGenBtn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Olu\u015fturuluyor...'; }
+
+            window.dashboardAPI.generateNarrative().then(function(data) {
+                // NarrativeUpdate handler zaten DOM'u guncelledi (message listener'da)
+                // Burada sadece hata kontrolu
+                if (data && data.error) {
+                    var headlineEl = document.getElementById('narrativeHeadline');
+                    if (headlineEl) headlineEl.textContent = 'Analiz ba\u015far\u0131s\u0131z: ' + data.error;
+                    if (btn) { btn.disabled = false; btn.textContent = 'Tekrar Dene'; }
+                }
+            }).catch(function(err) {
+                console.error('Narrative request failed:', err);
+                if (btn) { btn.disabled = false; btn.textContent = 'Tekrar Dene'; }
+            });
         }
 
         // =============================================
@@ -1346,19 +1792,15 @@
             });
         }
 
-        // Duration ticker: her saniye sadece DOM text node'larini gunceller (DB sorgusu yapmaz)
+        // Duration ticker + portal uptime
         function tickDurations() {
-            // Active App Card — direct DOM write, no store round-trip
             ActiveAppRenderer.tickDuration();
 
-            // Activity list first row duration
-            if (_durationState.baseDurations.length) {
-                var elapsed = Math.floor((Date.now() - _durationState.fetchedAt) / 1000);
-                var topDuration = _durationState.baseDurations[0] + elapsed;
-                var firstDurEl = document.querySelector('.activity-list .activity-row:first-child .activity-dur');
-                if (firstDurEl) {
-                    firstDurEl.textContent = formatDuration(topDuration);
-                }
+            // Portal uptime
+            var uptimeEl = document.getElementById('footerUptime');
+            if (uptimeEl && _portalStartTime) {
+                var elapsed = Math.floor((Date.now() - _portalStartTime) / 1000);
+                uptimeEl.textContent = formatDuration(elapsed);
             }
         }
 
@@ -1392,6 +1834,10 @@
             setTimeout(tryLoad, 500);
         })();
 
+        // Scroll to top on load — hero card'in kesilmesini engelle
+        var _dashMain = document.getElementById('page-dashboard');
+        if (_dashMain) _dashMain.scrollTop = 0;
+
         setInterval(tickDurations, 1000);
 
         // Refresh sadece ActiveAppChanged event'i geldiginde tetiklenir
@@ -1399,6 +1845,387 @@
 
         // ── Auto-init accessible tooltips ──
         try { if (typeof Tooltip !== 'undefined') Tooltip.initAll(); } catch(e) { console.warn('Tooltip init skipped:', e); }
+
+        // =============================================
+        // Page: Activity — data loader & renderers
+        // =============================================
+        async function loadActivityPage() {
+            try {
+                var results = await Promise.all([
+                    window.dashboardAPI.getActivityLogs(50),
+                    window.dashboardAPI.getProductivityData(),
+                    window.dashboardAPI.getDashboardSummary()
+                ]);
+                var logsResp = results[0], prodResp = results[1], summaryResp = results[2];
+
+                if (prodResp && prodResp.metrics) {
+                    var m = prodResp.metrics;
+                    var el1 = document.getElementById('actTotalTime');
+                    if (el1) el1.textContent = formatDuration(m.totalTime || 0);
+                    var el2 = document.getElementById('actProductivity');
+                    if (el2) el2.textContent = Math.round(m.productivity || 0) + '%';
+                }
+
+                if (logsResp && logsResp.logs) {
+                    var el3 = document.getElementById('actTotalCount');
+                    if (el3) el3.textContent = logsResp.logs.length;
+                    var el4 = document.getElementById('actTimelineCount');
+                    if (el4) el4.textContent = logsResp.logs.length + ' kay\u0131t';
+                    _renderActTimeline(logsResp.logs);
+                }
+
+                if (summaryResp) {
+                    if (summaryResp.topApps && summaryResp.topApps.length > 0) {
+                        var el5 = document.getElementById('actTopApp');
+                        if (el5) el5.textContent = (summaryResp.topApps[0].process || '').replace('.exe', '');
+                        _renderActTopApps(summaryResp.topApps);
+                    }
+                    if (prodResp && prodResp.metrics && prodResp.metrics.categories) {
+                        _renderActCategoryDist(prodResp.metrics.categories, summaryResp.timeBreakdown || {});
+                    }
+                }
+            } catch(e) { console.error('Activity page load error:', e); }
+        }
+
+        function _renderActTimeline(logs) {
+            var c = document.getElementById('actTimeline');
+            if (!c) return;
+            if (!logs || logs.length === 0) {
+                c.innerHTML = '<div style="text-align:center;padding:32px;color:rgba(255,255,255,.3)">Hen\u00fcz aktivite kaydedilmedi</div>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < logs.length; i++) {
+                var log = logs[i];
+                var procName = (log.process || '').replace('.exe','') || 'Unknown';
+                var icon = getAppIcon(log.process || '');
+                html += '<div class="activity-row">'
+                    + '<span style="font-size:18px;flex-shrink:0">' + icon + '</span>'
+                    + '<div class="activity-info">'
+                    + '<div class="activity-proc">' + procName + ' ' + getSourceBadge(log.source) + '</div>'
+                    + '<div class="activity-ttl">' + ((log.title || '(No title)').substring(0,80)) + '</div>'
+                    + '</div>'
+                    + '<div class="activity-meta">'
+                    + '<div>' + buildOverrideSelect(log, i) + '</div>'
+                    + '<div class="activity-dur">' + formatDuration(log.duration) + '</div>'
+                    + '</div>'
+                    + '</div>';
+            }
+            c.innerHTML = html;
+        }
+
+        function _renderActTopApps(topApps) {
+            var c = document.getElementById('actTopApps');
+            if (!c || !topApps || topApps.length === 0) return;
+            var maxDur = topApps[0].durationSec || 1;
+            var html = '';
+            for (var i = 0; i < topApps.length; i++) {
+                var app = topApps[i];
+                var name = (app.process || '').replace('.exe','') || 'Unknown';
+                var icon = getAppIcon(app.process || '');
+                var col = getCategoryColor(app.category, app.score);
+                var pct = Math.round((app.durationSec || 0) / maxDur * 100);
+                html += '<div style="display:flex;align-items:center;gap:12px">'
+                    + '<span style="font-size:20px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.04);border-radius:10px;flex-shrink:0">' + icon + '</span>'
+                    + '<div style="flex:1;min-width:0">'
+                    + '<div style="font-size:13px;color:rgba(255,255,255,.85)">' + name + '</div>'
+                    + '<div style="margin-top:4px;height:4px;border-radius:2px;background:rgba(255,255,255,.06);overflow:hidden">'
+                    + '<div style="height:100%;width:' + pct + '%;background:' + col.dot + ';border-radius:2px;transition:width .5s ease"></div>'
+                    + '</div></div>'
+                    + '<div style="text-align:right;flex-shrink:0">'
+                    + '<div style="font-size:13px;color:rgba(255,255,255,.7)">' + formatDuration(app.durationSec) + '</div>'
+                    + '<div class="activity-cat' + (col.cls ? ' ' + col.cls : '') + '" style="margin-top:2px">' + (app.category || '-') + '</div>'
+                    + '</div></div>';
+            }
+            c.innerHTML = html;
+        }
+
+        var _catColors = {
+            'Yazilim':'#34d399','Egitim':'#22d3ee','Gelistirme':'#34d399','Is':'#3b82f6',
+            'Tasarim':'#a78bfa','Arastirma':'#22d3ee','Eglence':'#fbbf24','Sosyal Medya':'#fb923c',
+            'Oyun':'#ef4444','Iletisim':'#a78bfa','Diger':'#6b7280','Uncategorized':'#6b7280'
+        };
+
+        function _renderActCategoryDist(categories, breakdown) {
+            var c = document.getElementById('actCategoryDist');
+            if (!c) return;
+            var total = (breakdown.totalSec || 0);
+            if (total === 0) { for (var k in categories) total += (categories[k] || 0); }
+            if (total === 0) total = 1;
+            var items = [];
+            for (var cat in categories) {
+                if (categories[cat] > 0) items.push({ name: cat, seconds: categories[cat] });
+            }
+            items.sort(function(a,b) { return b.seconds - a.seconds; });
+            if (items.length === 0) {
+                c.innerHTML = '<div style="text-align:center;padding:16px;color:rgba(255,255,255,.3);font-size:13px">Veri bekleniyor...</div>';
+                return;
+            }
+            var html = '<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:12px">';
+            for (var i = 0; i < items.length; i++) {
+                html += '<div style="width:' + (items[i].seconds / total * 100) + '%;background:' + (_catColors[items[i].name] || '#6b7280') + '"></div>';
+            }
+            html += '</div>';
+            for (var i = 0; i < items.length; i++) {
+                var pct = Math.round(items[i].seconds / total * 100);
+                var color = _catColors[items[i].name] || '#6b7280';
+                html += '<div style="display:flex;align-items:center;gap:10px">'
+                    + '<div style="width:8px;height:8px;border-radius:50%;background:' + color + ';flex-shrink:0"></div>'
+                    + '<div style="flex:1;font-size:13px;color:rgba(255,255,255,.7)">' + items[i].name + '</div>'
+                    + '<div style="font-size:12px;color:rgba(255,255,255,.4)">' + formatDuration(items[i].seconds) + '</div>'
+                    + '<div style="font-size:12px;color:rgba(255,255,255,.3);width:32px;text-align:right">' + pct + '%</div>'
+                    + '</div>';
+            }
+            c.innerHTML = html;
+        }
+
+        // =============================================
+        // Page: AI Insights — data loader & renderers
+        // =============================================
+        async function loadAIInsightsPage() {
+            try {
+                var results = await Promise.all([
+                    window.dashboardAPI.getOverrideRules(),
+                    window.dashboardAPI.getOverrideAuditLog(),
+                    window.dashboardAPI.getActivityLogs(50)
+                ]);
+                var rulesResp = results[0], auditResp = results[1], logsResp = results[2];
+
+                var categorized = 0, uncategorized = 0;
+                if (logsResp && logsResp.logs) {
+                    for (var i = 0; i < logsResp.logs.length; i++) {
+                        if (logsResp.logs[i].category && logsResp.logs[i].category !== 'Uncategorized') categorized++;
+                        else uncategorized++;
+                    }
+                }
+                var el1 = document.getElementById('aiStatCategorized');
+                if (el1) el1.textContent = categorized + ' / ' + (categorized + uncategorized);
+
+                if (rulesResp && rulesResp.rules) {
+                    var el2 = document.getElementById('aiStatRules');
+                    if (el2) el2.textContent = rulesResp.rules.length;
+                    var el3 = document.getElementById('aiRulesCount');
+                    if (el3) el3.textContent = rulesResp.rules.length + ' kural tan\u0131ml\u0131';
+                    _renderAIRules(rulesResp.rules);
+                }
+
+                if (auditResp && auditResp.audit) {
+                    _renderAIAuditLog(auditResp.audit);
+                }
+
+                // AI status hint based on categorized ratio
+                var aiStatus = document.getElementById('aiStatStatus');
+                if (aiStatus) {
+                    if (uncategorized > 0) {
+                        aiStatus.innerHTML = '<span style="color:#fbbf24">' + uncategorized + ' bekliyor</span>';
+                    } else if (categorized > 0) {
+                        aiStatus.innerHTML = '<span style="color:#34d399">T\u00fcm\u00fc kategorize</span>';
+                    }
+                }
+            } catch(e) { console.error('AI Insights load error:', e); }
+        }
+
+        async function triggerAICategorize() {
+            var btn = document.getElementById('aiCategorizeText');
+            if (btn) btn.textContent = '\u23f3 \u0130\u015fleniyor...';
+            try {
+                var resp = await window.dashboardAPI.categorizeWithAI();
+                if (resp && resp.status === 'success') {
+                    if (btn) btn.textContent = '\u2705 ' + (resp.processed || 0) + ' kategorize edildi';
+                    setTimeout(loadAIInsightsPage, 1000);
+                } else {
+                    if (btn) btn.textContent = '\u274c ' + ((resp && resp.message) || 'Hata');
+                }
+            } catch(e) {
+                if (btn) btn.textContent = '\u274c Hata olu\u015ftu';
+            }
+            setTimeout(function() { if (btn) btn.textContent = '\ud83e\udde0 Kategorize Et'; }, 3000);
+        }
+
+        function _renderAIRules(rules) {
+            var c = document.getElementById('aiRulesList');
+            if (!c) return;
+            if (!rules || rules.length === 0) {
+                c.innerHTML = '<div style="text-align:center;padding:32px;color:rgba(255,255,255,.3);font-size:13px">Hen\u00fcz override kural\u0131 tan\u0131mlanmam\u0131\u015f.<br><span style="font-size:11px">Activity sekmesinden kategori de\u011fi\u015ftirerek kural olu\u015fturabilirsiniz.</span></div>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < rules.length; i++) {
+                var r = rules[i];
+                var procName = (r.exePath || '').replace('.exe','') || 'Unknown';
+                var icon = getAppIcon(r.exePath || '');
+                var col = getCategoryColor(r.category, r.score);
+                html += '<div class="activity-row">'
+                    + '<span style="font-size:18px;flex-shrink:0">' + icon + '</span>'
+                    + '<div class="activity-info">'
+                    + '<div class="activity-proc">' + procName + '</div>'
+                    + '<div class="activity-ttl">Pattern: ' + (r.titlePattern || '*') + '</div>'
+                    + '</div>'
+                    + '<div class="activity-meta">'
+                    + '<div class="activity-cat' + (col.cls ? ' ' + col.cls : '') + '">' + (r.category || '-') + '</div>'
+                    + '<div class="activity-dur">' + (r.updatedAt || '').substring(0,10) + '</div>'
+                    + '</div></div>';
+            }
+            c.innerHTML = html;
+        }
+
+        function _renderAIAuditLog(audit) {
+            var c = document.getElementById('aiAuditLog');
+            if (!c) return;
+            if (!audit || audit.length === 0) {
+                c.innerHTML = '<div style="text-align:center;padding:16px;color:rgba(255,255,255,.3);font-size:13px">Hen\u00fcz de\u011fi\u015fiklik yap\u0131lmam\u0131\u015f</div>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < Math.min(audit.length, 20); i++) {
+                var a = audit[i];
+                var proc = (a.exePath || '').replace('.exe','') || '?';
+                html += '<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,.04)">'
+                    + '<div style="font-size:12px;color:rgba(255,255,255,.7)">'
+                    + '<span style="font-weight:500">' + proc + '</span>'
+                    + ' <span style="color:rgba(255,255,255,.3)">\u2192</span> '
+                    + '<span style="color:rgba(251,191,36,.7)">' + (a.oldCategory || '?') + '</span>'
+                    + ' \u2192 '
+                    + '<span style="color:rgba(52,211,153,.7)">' + (a.newCategory || '?') + '</span>'
+                    + '</div>'
+                    + '<div style="font-size:10px;color:rgba(255,255,255,.25);margin-top:2px">' + (a.timestamp || '') + '</div>'
+                    + '</div>';
+            }
+            c.innerHTML = html;
+        }
+
+        // =============================================
+        // Page: History — data loader & renderers
+        // =============================================
+        async function loadHistoryPage() {
+            try {
+                var results = await Promise.all([
+                    window.dashboardAPI.getDashboardSummary(),
+                    window.dashboardAPI.getActivityLogs(50)
+                ]);
+                var summaryResp = results[0], logsResp = results[1];
+
+                if (summaryResp && summaryResp.timeBreakdown) {
+                    var tb = summaryResp.timeBreakdown;
+                    var el1 = document.getElementById('histTodayTotal');
+                    if (el1) el1.textContent = formatDuration(tb.totalSec || 0);
+                    var el2 = document.getElementById('histProductive');
+                    if (el2) el2.textContent = formatDuration(tb.productiveSec || 0);
+                    var el3 = document.getElementById('histUnproductive');
+                    if (el3) el3.textContent = formatDuration(tb.unproductiveSec || 0);
+
+                    var barEl = document.getElementById('histTimeBar');
+                    if (barEl && tb.totalSec > 0) {
+                        barEl.innerHTML =
+                            '<div style="width:' + (tb.productivePct || 0) + '%;background:#34d399;transition:width .5s"></div>'
+                            + '<div style="width:' + (tb.neutralPct || 0) + '%;background:#6b7280;transition:width .5s"></div>'
+                            + '<div style="width:' + (tb.unproductivePct || 0) + '%;background:#fbbf24;transition:width .5s"></div>';
+                    }
+                    var legendEl = document.getElementById('histTimeLegend');
+                    if (legendEl) {
+                        legendEl.innerHTML =
+                            '<div style="display:flex;align-items:center;gap:6px"><div style="width:8px;height:8px;border-radius:50%;background:#34d399"></div><span style="font-size:12px;color:rgba(255,255,255,.5)">Verimli ' + Math.round(tb.productivePct || 0) + '%</span></div>'
+                            + '<div style="display:flex;align-items:center;gap:6px"><div style="width:8px;height:8px;border-radius:50%;background:#6b7280"></div><span style="font-size:12px;color:rgba(255,255,255,.5)">N\u00f6tr ' + Math.round(tb.neutralPct || 0) + '%</span></div>'
+                            + '<div style="display:flex;align-items:center;gap:6px"><div style="width:8px;height:8px;border-radius:50%;background:#fbbf24"></div><span style="font-size:12px;color:rgba(255,255,255,.5)">Verimsiz ' + Math.round(tb.unproductivePct || 0) + '%</span></div>';
+                    }
+                }
+
+                if (logsResp && logsResp.logs) {
+                    var el4 = document.getElementById('histLogCount');
+                    if (el4) el4.textContent = logsResp.logs.length + ' kay\u0131t (bug\u00fcn)';
+                    _renderHistActivityList(logsResp.logs);
+                }
+
+                _renderHistSessions();
+            } catch(e) { console.error('History page load error:', e); }
+        }
+
+        function _renderHistActivityList(logs) {
+            var c = document.getElementById('histActivityList');
+            if (!c) return;
+            if (!logs || logs.length === 0) {
+                c.innerHTML = '<div style="text-align:center;padding:32px;color:rgba(255,255,255,.3);font-size:13px">Bug\u00fcn i\u00e7in aktivite kayd\u0131 yok</div>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < logs.length; i++) {
+                var log = logs[i];
+                var procName = (log.process || '').replace('.exe','') || 'Unknown';
+                var icon = getAppIcon(log.process || '');
+                var col = getCategoryColor(log.category, log.score);
+                html += '<div class="activity-row">'
+                    + '<span style="font-size:16px;flex-shrink:0">' + icon + '</span>'
+                    + '<div class="activity-info">'
+                    + '<div class="activity-proc">' + procName + '</div>'
+                    + '<div class="activity-ttl">' + ((log.title || '-').substring(0,60)) + '</div>'
+                    + '</div>'
+                    + '<div class="activity-meta">'
+                    + '<div class="activity-cat' + (col.cls ? ' ' + col.cls : '') + '">' + (log.category || '-') + '</div>'
+                    + '<div class="activity-dur">' + formatDuration(log.duration) + '</div>'
+                    + '</div></div>';
+            }
+            c.innerHTML = html;
+        }
+
+        function _renderHistSessions() {
+            var c = document.getElementById('histSessions');
+            if (!c) return;
+            if (typeof _timerService === 'undefined' || !_timerService) {
+                c.innerHTML = '<div style="text-align:center;padding:16px;color:rgba(255,255,255,.3);font-size:13px">Timer servisi bulunamad\u0131</div>';
+                return;
+            }
+            var state = _timerService.getState();
+            if (!state || !state.sessions || state.sessions.length === 0) {
+                c.innerHTML = '<div style="text-align:center;padding:16px;color:rgba(255,255,255,.3);font-size:13px">Bu oturumda hen\u00fcz uygulama ge\u00e7i\u015fi yok</div>';
+                return;
+            }
+            var html = '';
+            var sessions = state.sessions;
+            for (var i = sessions.length - 1; i >= Math.max(0, sessions.length - 15); i--) {
+                var s = sessions[i];
+                var durSec = Math.round((s.durationMs || 0) / 1000);
+                html += '<div class="session-row">'
+                    + '<span class="session-app">' + (s.appName || 'Unknown') + '</span>'
+                    + '<span class="session-dur">' + formatDuration(durSec) + '</span>'
+                    + '</div>';
+            }
+            c.innerHTML = html;
+        }
+
+        // =============================================
+        // Page: Settings — data loader & actions
+        // =============================================
+        async function loadSettingsPage() {
+            try {
+                var resp = await window.dashboardAPI.getAutostartStatus();
+                if (resp) {
+                    var toggle = document.getElementById('settAutostart');
+                    var method = document.getElementById('settAutoMethod');
+                    if (toggle) toggle.checked = resp.registry || resp.taskScheduler;
+                    if (method) method.value = resp.taskScheduler ? 'taskscheduler' : 'registry';
+                }
+            } catch(e) { console.warn('Settings autostart check failed:', e); }
+
+            var dot = document.getElementById('settAIDot');
+            var text = document.getElementById('settAIText');
+            if (dot) dot.style.background = '#fbbf24';
+            if (text) text.textContent = 'GEMINI_API_KEY ortam de\u011fi\u015fkenine ba\u011fl\u0131';
+        }
+
+        async function toggleAutostart(enabled) {
+            var method = document.getElementById('settAutoMethod');
+            var methodValue = method ? method.value : 'registry';
+            try {
+                var resp = await window.dashboardAPI.setAutostart(enabled, methodValue);
+                if (resp && resp.status !== 'success') {
+                    var toggle = document.getElementById('settAutostart');
+                    if (toggle) toggle.checked = !enabled;
+                }
+            } catch(e) {
+                var toggle = document.getElementById('settAutostart');
+                if (toggle) toggle.checked = !enabled;
+            }
+        }
 
         // =============================================
         // Atmospheric Parallax (throttled via rAF)

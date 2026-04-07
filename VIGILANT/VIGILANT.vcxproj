@@ -55,9 +55,12 @@
     <None Include="dashboard_pro.html" />
     <None Include="docs\OPTIMIZATION_PLAN.md" />
     <None Include="docs\PERF_RUNBOOK.md" />
+    <None Include="flow-state.css" />
     <None Include="micro-interactions.css" />
     <None Include="micro-interactions.js" />
     <None Include="ts\dashboard\dom-updater.ts" />
+    <None Include="ts\dashboard\flow-state-controller.test.ts" />
+    <None Include="ts\dashboard\flow-state-controller.ts" />
     <None Include="ts\dashboard\mood-engine.test.ts" />
     <None Include="ts\dashboard\mood-engine.ts" />
     <None Include="ts\dashboard\pubsub.ts" />

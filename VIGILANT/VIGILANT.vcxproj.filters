@@ -5,11 +5,11 @@
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
       <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
     </Filter>
-    <Filter Include="Üst Bilgi Dosyalarý">
+    <Filter Include="ï¿½st Bilgi Dosyalarï¿½">
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
       <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
     </Filter>
-    <Filter Include="Kaynak Dosyalarý">
+    <Filter Include="Kaynak Dosyalarï¿½">
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
@@ -63,46 +63,46 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\Core\WindowTracker.hpp">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
     <ClInclude Include="include\UI\BrowserBridge.hpp">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
     <ClInclude Include="include\Utils\EventQueue.hpp">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
     <ClInclude Include="include\Data\DatabaseManager.hpp">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
     <ClInclude Include="vendor\sqlite\sqlite3.h">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
     <ClInclude Include="include\AI\AIClassifierTask.hpp">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
     <ClInclude Include="include\AI\GeminiService.hpp">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
     <ClInclude Include="include\Utils\EventBridge.hpp">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
     <ClInclude Include="include\Utils\RingBuffer.hpp">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
     <ClInclude Include="include\Utils\StartupManager.hpp">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
     <ClInclude Include="include\UI\TrayManager.hpp">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
     <ClInclude Include="include\Utils\PerfCounters.hpp">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
     <ClInclude Include="include\Utils\PerfSnapshot.hpp">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
     <ClInclude Include="include\Utils\ProcessCache.hpp">
-      <Filter>Üst Bilgi Dosyalarý</Filter>
+      <Filter>ï¿½st Bilgi Dosyalarï¿½</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -126,6 +126,11 @@
     <None Include="ts\gemini\example.ts" />
     <None Include="docs\OPTIMIZATION_PLAN.md" />
     <None Include="docs\PERF_RUNBOOK.md" />
+    <None Include="micro-interactions.css" />
+    <None Include="micro-interactions.js" />
+    <None Include="ts\dashboard\flow-state-controller.ts" />
+    <None Include="flow-state.css" />
+    <None Include="ts\dashboard\flow-state-controller.test.ts" />
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="$(MSBuildThisFileDirectory)..\..\natvis\wil.natvis" />

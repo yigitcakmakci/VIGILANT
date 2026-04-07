@@ -1,0 +1,199 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   VIGILANT – Flow State Visual Mode
+   CSS custom properties + crossfade transitions for the flow overlay.
+
+   Driven by FlowStateController (flow-state-controller.ts) which sets
+   --flow-* variables via JS on the target element.
+
+   Performance notes:
+     • All animated properties use transform / opacity only – no layout
+       or paint triggers.
+     • The breathing animation is GPU-composited (translateZ(0) hint).
+     • prefers-reduced-motion disables all keyframes and transitions.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. FLOW DESIGN TOKENS ─────────────────────────────────────────── */
+:root {
+    /* JS-driven variables (defaults = idle / off) */
+    --flow-overlay-opacity:  0;
+    --flow-glow-scale:       1;
+    --flow-border-accent:    0;
+    --flow-breathing-speed:  0;
+    --flow-bg-tint:          0;
+
+    /* Static palette for flow mode */
+    --flow-accent-h:  200;
+    --flow-accent-s:  90%;
+    --flow-accent-l:  60%;
+    --flow-accent:    var(--flow-accent-h) var(--flow-accent-s) var(--flow-accent-l);
+
+    /* Crossfade durations (used only in CSS-transition fallback mode) */
+    --flow-transition-in:   1.2s;
+    --flow-transition-out:  0.8s;
+}
+
+
+/* ── 2. FLOW OVERLAY LAYER ─────────────────────────────────────────── */
+/*
+   A fixed overlay that tints the viewport with a soft radial glow.
+   Opacity is entirely driven by --flow-overlay-opacity from JS.
+*/
+.flow-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    background: radial-gradient(
+        ellipse at 50% 40%,
+        hsl(var(--flow-accent) / 0.12) 0%,
+        transparent 70%
+    );
+    opacity: var(--flow-overlay-opacity);
+    will-change: opacity;
+}
+
+
+/* ── 3. FLOW GLOW ORB ─────────────────────────────────────────────── */
+/*
+   Ambient glow circle that scales up during flow.
+   Uses transform: scale() for GPU compositing.
+*/
+.flow-glow-orb {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 500px;
+    height: 500px;
+    transform: translate(-50%, -50%) scale(var(--flow-glow-scale));
+    border-radius: 50%;
+    background: hsl(var(--flow-accent) / 0.06);
+    filter: blur(100px);
+    pointer-events: none;
+    z-index: 0;
+    will-change: transform;
+}
+
+
+/* ── 4. FLOW BORDER ACCENT ─────────────────────────────────────────── */
+/*
+   Optional card-border glow that intensifies in flow state.
+*/
+.flow-border-glow {
+    box-shadow: 0 0 0 1px hsl(var(--flow-accent) / var(--flow-border-accent)),
+                0 0 12px hsl(var(--flow-accent) / calc(var(--flow-border-accent) * 0.5));
+}
+
+
+/* ── 5. FLOW BREATHING ANIMATION ───────────────────────────────────── */
+/*
+   Subtle scale/opacity pulse.  Speed is controlled by --flow-breathing-speed:
+     0  → animation-duration: infinite (effectively paused)
+     1  → animation-duration: 4s (full speed)
+   We use a calc-based duration trick since animation-play-state: paused
+   would freeze at a mid-frame, whereas an extremely long duration fades
+   to stillness gracefully.
+*/
+@keyframes flowBreathe {
+    0%, 100% {
+        opacity: var(--flow-overlay-opacity);
+        transform: translate(-50%, -50%) scale(var(--flow-glow-scale));
+    }
+    50% {
+        opacity: calc(var(--flow-overlay-opacity) * 1.15);
+        transform: translate(-50%, -50%) scale(calc(var(--flow-glow-scale) * 1.04));
+    }
+}
+
+.flow-glow-orb--breathing {
+    animation: flowBreathe 4s var(--ease-in-out, ease-in-out) infinite;
+    /* Pause when speed is 0 by switching play-state via data attr */
+}
+
+/*
+   The controller sets data-flow-state on the root element.
+   Only run breathing when in "flow" or "cooldown" (cooldown runs slower
+   via the JS-driven --flow-breathing-speed multiplier).
+*/
+[data-flow-state="flow"] .flow-glow-orb--breathing,
+[data-flow-state="cooldown"] .flow-glow-orb--breathing {
+    animation-play-state: running;
+}
+[data-flow-state="idle"] .flow-glow-orb--breathing,
+[data-flow-state="active"] .flow-glow-orb--breathing {
+    animation-play-state: paused;
+}
+
+
+/* ── 6. BACKGROUND TINT ───────────────────────────────────────────── */
+.flow-bg-tint {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: -1;
+    background: hsl(var(--flow-accent) / var(--flow-bg-tint));
+    will-change: opacity;
+}
+
+
+/* ── 7. FLOW STATE INDICATOR BADGE ─────────────────────────────────── */
+.flow-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 99px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.6s var(--ease-out, ease-out),
+                transform 0.6s var(--ease-spring, ease-out);
+    pointer-events: none;
+}
+
+.flow-badge__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: hsl(var(--flow-accent));
+    box-shadow: 0 0 6px hsl(var(--flow-accent) / 0.5);
+}
+
+/* Show badge in Flow state */
+[data-flow-state="flow"] .flow-badge {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+/* Dimmed in Cooldown */
+[data-flow-state="cooldown"] .flow-badge {
+    opacity: 0.5;
+    transform: translateY(0);
+}
+
+
+/* ── 8. prefers-reduced-motion ─────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    .flow-overlay,
+    .flow-glow-orb,
+    .flow-bg-tint,
+    .flow-badge {
+        transition: none !important;
+    }
+
+    .flow-glow-orb--breathing {
+        animation: none !important;
+    }
+
+    /*
+       In reduced-motion mode the JS controller instantly swaps
+       CSS variable values (no rAF crossfade), so the overlay simply
+       appears/disappears. We keep the visual feedback (opacity/tint)
+       but remove all motion.
+    */
+}

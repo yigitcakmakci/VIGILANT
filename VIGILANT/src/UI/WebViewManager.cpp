@@ -3,10 +3,68 @@
 #include "Data/DatabaseManager.hpp"
 #include "AI/GeminiService.hpp"
 #include "Utils/StartupManager.hpp"
+#include "Utils/json.hpp"
 #include <sstream>
 
 extern DatabaseManager g_Vault;
 extern GeminiService g_Gemini;
+
+// --- Narrative Input Builder ---
+// Mevcut WindowTracker ve veritabani verilerini kullanarak
+// Activity Narrative icin girdi JSON'u olusturur.
+static nlohmann::json prepareNarrativeInput(DatabaseManager& db) {
+    using json = nlohmann::json;
+
+    // Tarih (yerel saat)
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char dateBuf[16];
+    sprintf_s(dateBuf, "%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
+
+    // Dashboard ozet verisi (topApps + total duration)
+    auto summary = db.getDashboardSummaryJson();
+
+    // totalFocusMinutes
+    int totalDurationSec = 0;
+    if (summary.contains("productivity") && summary["productivity"].contains("totalDurationSec"))
+        totalDurationSec = summary["productivity"]["totalDurationSec"].get<int>();
+    int totalFocusMinutes = totalDurationSec / 60;
+
+    // topWindows — getDashboardSummaryJson().topApps -> [{process, durationSec, category, score}]
+    json topWindows = json::array();
+    if (summary.contains("topApps") && summary["topApps"].is_array()) {
+        for (const auto& app : summary["topApps"]) {
+            std::string proc = app.value("process", "Unknown");
+            int durSec = app.value("durationSec", 0);
+            topWindows.push_back({
+                {"title", proc},
+                {"app", proc},
+                {"minutes", durSec / 60}
+            });
+        }
+    }
+
+    // milestones — kategori dagilimi (her kategori bir milestone)
+    json milestones = json::array();
+    auto dist = db.getCategoryDistribution();
+    for (const auto& [cat, durSec] : dist) {
+        int mins = (int)(durSec / 60.0f);
+        if (mins < 1) continue;
+        milestones.push_back({
+            {"label", cat},
+            {"minutes", mins},
+            {"evidence", std::to_string(mins) + " dk " + cat + " aktivitesi"}
+        });
+    }
+
+    json input;
+    input["date"] = std::string(dateBuf);
+    input["totalFocusMinutes"] = totalFocusMinutes;
+    input["topWindows"] = topWindows;
+    input["milestones"] = milestones;
+
+    return input;
+}
 
 // Helper function to escape JSON strings
 std::string EscapeJson(const std::string& str) {
@@ -428,6 +486,28 @@ std::string WebViewManager::HandleMessage(const std::string& message) {
 
                     OutputDebugStringW(L"[WebViewManager] AI kategorize tamamlandi\n");
                 }
+            }
+        }
+        else if (message.find("generateNarrative") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] Narrative olusturma istegi alindi\n");
+
+            if (!g_Gemini.isAvailable()) {
+                response = "{\"type\":\"NarrativeUpdate\",\"error\":\"GEMINI_API_KEY bulunamadi\"";
+                if (!requestId.empty()) response += ",\"requestId\":" + requestId;
+                response += "}";
+            }
+            else {
+                auto narrativeInput = prepareNarrativeInput(g_Vault);
+                OutputDebugStringW(L"[WebViewManager] Narrative input hazirlandi\n");
+
+                auto narrativeResult = g_Gemini.generateNarrative(narrativeInput);
+
+                // NarrativeUpdate tipini ekle
+                narrativeResult["type"] = "NarrativeUpdate";
+                if (!requestId.empty()) narrativeResult["requestId"] = requestId;
+
+                response = narrativeResult.dump();
+                OutputDebugStringW(L"[WebViewManager] Narrative yaniti hazirlandi\n");
             }
         }
         else if (message.find("saveCategoryOverride") != std::string::npos) {

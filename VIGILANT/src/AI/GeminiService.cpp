@@ -3,8 +3,11 @@
 #include <winhttp.h>
 #include <sstream>
 #include <vector>
+#include "Utils/json.hpp"
 
 #pragma comment(lib, "winhttp.lib")
+
+using json = nlohmann::json;
 
 // VS Output penceresine log yazan yardimci
 static void DebugLog(const std::string& msg) {
@@ -381,4 +384,161 @@ std::string GeminiService::escapeJson(const std::string& str) {
         }
     }
     return out;
+}
+
+// --- Activity Narrative Generator ---
+json GeminiService::generateNarrative(const json& narrativeInput) {
+    if (!isAvailable()) {
+        DebugLog("[AI] Narrative: API anahtari yok, iptal.");
+        return json{{"error", "API key not available"}};
+    }
+
+    // Deterministic system prompt
+    static const char* kSystemPrompt =
+        "You are ActivityNarrativeBot.\n\n"
+        "ROLE: Generate a short, motivating developer-focused narrative from structured "
+        "activity telemetry. Output MUST be a single raw JSON object with NO markdown fences, "
+        "NO extra keys, NO explanation text.\n\n"
+        "SCHEMA:\n"
+        "{\n"
+        "  \"headline\": string (max 120 chars, one sentence, Turkish),\n"
+        "  \"highlights\": string[3] (exactly 3 bullet sentences, Turkish),\n"
+        "  \"next_step\": string (one actionable suggestion for tomorrow, Turkish),\n"
+        "  \"confidence\": number (0-1),\n"
+        "  \"safety_notes\": string[] (redactions taken; [] if none)\n"
+        "}\n\n"
+        "HARD RULES:\n"
+        "1. GROUNDING: Every fact MUST trace to an explicit field in the user-supplied JSON. "
+        "Never invent project names, technologies, or achievements not present in the input.\n"
+        "2. REDACTION: Before using any window title, file path, URL, token, email address, "
+        "hostname, or IP address in your output, replace the sensitive segment with [REDACTED]. "
+        "Record each redaction in safety_notes.\n"
+        "3. TONE: Concise, motivating, developer-oriented. Turkish language.\n"
+        "4. DETERMINISM: Given identical input, always produce the same output. "
+        "Do not add random flourishes or vary adjectives across runs.\n"
+        "5. HIGHLIGHTS LOGIC:\n"
+        "   a. Highlight 1: derived from the top window by minutes.\n"
+        "   b. Highlight 2: derived from the highest-minutes milestone.\n"
+        "   c. Highlight 3: derived from commitsSummary if present; "
+        "otherwise from the second-highest-minutes window.\n"
+        "6. NEXT_STEP: Suggest continuing work related to the milestone with the lowest minutes. "
+        "If only one milestone exists, suggest deepening that area.\n"
+        "7. CONFIDENCE: Set to 1.0 when every claim maps directly to an input field. "
+        "Lower proportionally if approximation was needed.\n"
+        "8. Output ONLY the raw JSON object. No markdown, no code fences, no extra text.";
+
+    std::string userPrompt =
+        "Here is today's activity telemetry. Generate the ActivityNarrative JSON.\n\n"
+        + narrativeInput.dump(2);
+
+    // Gemini API request with system_instruction
+    std::string requestBody =
+        "{\"system_instruction\":{\"parts\":[{\"text\":\"" + escapeJson(kSystemPrompt) + "\"}]},"
+        "\"contents\":[{\"parts\":[{\"text\":\"" + escapeJson(userPrompt) + "\"}]}],"
+        "\"generationConfig\":{\"temperature\":0.1,\"maxOutputTokens\":2048}}";
+
+    DebugLog("[AI] Narrative istek gonderiliyor (" + std::to_string(requestBody.size()) + " byte)...");
+
+    std::string response = sendRequest(requestBody);
+    if (response.empty()) {
+        DebugLog("[AI] Narrative: Gemini'den bos yanit!");
+        return json{{"error", "Empty response from API"}};
+    }
+
+    // API hata kontrolu
+    if (response.find("\"error\"") != std::string::npos &&
+        response.find("\"candidates\"") == std::string::npos) {
+        DebugLog("[AI] Narrative: API hatasi - " + response.substr(0, 300));
+        return json{{"error", "API returned error"}};
+    }
+
+    // Gemini yanit JSON'unu parse et ve text alanini cikar
+    json geminiResponse;
+    try {
+        geminiResponse = json::parse(response);
+    } catch (const std::exception& e) {
+        DebugLog("[AI] Narrative: Gemini yanit parse hatasi: " + std::string(e.what()));
+        return json{{"error", "Failed to parse Gemini response"}};
+    }
+
+    std::string extractedText;
+    try {
+        extractedText = geminiResponse["candidates"][0]["content"]["parts"][0]["text"]
+            .get<std::string>();
+    } catch (...) {
+        DebugLog("[AI] Narrative: text alani cikarilamadi!");
+        return json{{"error", "Failed to extract text from response"}};
+    }
+
+    if (extractedText.empty()) {
+        DebugLog("[AI] Narrative: Bos text alani!");
+        return json{{"error", "Empty text in response"}};
+    }
+
+    DebugLog("[AI] Narrative text cikartildi (" + std::to_string(extractedText.size()) + " byte)");
+
+    // Markdown code fence temizligi
+    std::string cleaned = extractedText;
+    {
+        size_t fenceStart = cleaned.find("```json");
+        if (fenceStart != std::string::npos) {
+            cleaned = cleaned.substr(fenceStart + 7);
+            size_t fenceEnd = cleaned.rfind("```");
+            if (fenceEnd != std::string::npos) cleaned = cleaned.substr(0, fenceEnd);
+        }
+        else {
+            fenceStart = cleaned.find("```");
+            if (fenceStart != std::string::npos) {
+                cleaned = cleaned.substr(fenceStart + 3);
+                size_t fenceEnd = cleaned.rfind("```");
+                if (fenceEnd != std::string::npos) cleaned = cleaned.substr(0, fenceEnd);
+            }
+        }
+        // Trim whitespace
+        size_t first = cleaned.find_first_not_of(" \t\r\n");
+        size_t last = cleaned.find_last_not_of(" \t\r\n");
+        if (first != std::string::npos && last != std::string::npos)
+            cleaned = cleaned.substr(first, last - first + 1);
+    }
+
+    // JSON parse
+    json narrativeJson;
+    try {
+        narrativeJson = json::parse(cleaned);
+    } catch (const std::exception& e) {
+        DebugLog("[AI] Narrative: JSON parse hatasi: " + std::string(e.what()));
+        DebugLog("[AI] Narrative raw: " + cleaned.substr(0, 300));
+        return json{{"error", "JSON parse failed"}, {"raw", cleaned.substr(0, 300)}};
+    }
+
+    // Schema dogrulama
+    bool valid =
+        narrativeJson.contains("headline") && narrativeJson["headline"].is_string() &&
+        narrativeJson.contains("highlights") && narrativeJson["highlights"].is_array() &&
+        narrativeJson["highlights"].size() == 3 &&
+        narrativeJson.contains("next_step") && narrativeJson["next_step"].is_string() &&
+        narrativeJson.contains("confidence") && narrativeJson["confidence"].is_number() &&
+        narrativeJson.contains("safety_notes") && narrativeJson["safety_notes"].is_array();
+
+    if (!valid) {
+        DebugLog("[AI] Narrative: Schema dogrulama basarisiz!");
+        return json{{"error", "Schema validation failed"}, {"raw", narrativeJson.dump().substr(0, 300)}};
+    }
+
+    // highlights icindeki her elemanin string oldugunu dogrula
+    for (const auto& h : narrativeJson["highlights"]) {
+        if (!h.is_string()) {
+            DebugLog("[AI] Narrative: Highlight string degil!");
+            return json{{"error", "Schema validation failed: highlight not string"}};
+        }
+    }
+
+    // Confidence clamp [0, 1]
+    double conf = narrativeJson["confidence"].get<double>();
+    if (conf < 0.0) conf = 0.0;
+    if (conf > 1.0) conf = 1.0;
+    narrativeJson["confidence"] = conf;
+
+    DebugLog("[AI] Narrative basariyla olusturuldu (confidence=" + std::to_string(conf) + ")");
+    return narrativeJson;
 }
