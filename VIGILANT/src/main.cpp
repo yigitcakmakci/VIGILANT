@@ -1,16 +1,21 @@
 #include <windows.h>
+#include <dwmapi.h>
 #include <shellapi.h>
 #include <thread>
-#include <memory>
+
+#pragma comment(lib, "dwmapi.lib")
 #include "Data/DatabaseManager.hpp"
 #include "Core/WindowTracker.hpp"
 #include "Utils/EventQueue.hpp"
 #include "Utils/EventBridge.hpp"
 #include "UI/WebViewManager.hpp"
 #include "AI/AIClassifierTask.hpp"
-#include "UI/TrayIcon.hpp"
+#include "UI/TrayManager.hpp"
+#include "Utils/PerfSnapshot.hpp"
 
 #define WM_WEBVIEW_RESIZE (WM_APP + 1)
+#define WM_WEBVIEW_NEWEVENT (WM_APP + 2)
+#define WM_WEBVIEW_ACTIVEAPP (WM_APP + 3)
 
 // Global instances are defined in Instances.cpp and Workers.cpp
 extern DatabaseManager g_Vault;
@@ -19,9 +24,10 @@ extern WebViewManager* g_WebViewManager;
 extern EventBridge* g_EventBridge;
 extern AIClassifierTask g_AIClassifier;
 extern DWORD g_WebViewThreadId;
+extern DWORD g_HotkeyThreadId;
 
 // Defined in Window.cpp
-extern TrayIcon g_TrayIcon;
+extern TrayManager g_TrayManager;
 
 // Function declarations (defined in other files)
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -45,6 +51,10 @@ int main() {
     WindowTracker::StartTracking();
     OutputDebugStringW(L"Window tracking started\n");
 
+    // Performance snapshot logger (active only when VIGILANT_PERF_ENABLED is defined)
+    PerfSnapshotLogger perfLogger;
+    perfLogger.Start(30'000); // 30-second interval
+
     // 1. Create Window Class
     WNDCLASSEXW wc = { sizeof(wc), CS_HREDRAW | CS_VREDRAW, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, (HBRUSH)GetStockObject(BLACK_BRUSH), nullptr, L"VigilantWindowClass", nullptr };
     ::RegisterClassExW(&wc);
@@ -58,9 +68,13 @@ int main() {
     }
     OutputDebugStringW(L"Window created\n");
 
+    // Enable dark mode title bar to match the application's dark theme
+    BOOL useDarkMode = TRUE;
+    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDarkMode, sizeof(useDarkMode));
+
     // Initialize system tray icon
     HICON hTrayIcon = (HICON)LoadImageW(nullptr, IDI_APPLICATION, IMAGE_ICON, 0, 0, LR_SHARED);
-    g_TrayIcon.Create(hwnd, hTrayIcon, L"VIGILANT - Aktivite Izleme");
+    g_TrayManager.Create(hwnd, hTrayIcon, L"VIGILANT - Aktivite \u0130zleme");
     OutputDebugStringW(L"System tray icon created\n");
 
     // 3. Initialize WebView2 in a separate STA thread
@@ -86,9 +100,12 @@ int main() {
         } else {
             OutputDebugStringW(L"WebView2 initialized successfully in STA thread\n");
 
-            // WebView2 başarıyla başlatıldıktan sonra EventBridge'i başlat
+            // WebView2 hazir, bildirim artik BackgroundWorker uzerinden yapiliyor
             Sleep(1000); // WebView2'nin tamamen yüklenmesini bekle
-            g_EventBridge = new EventBridge(g_WebViewManager, &g_EventQueue);
+            OutputDebugStringW(L"WebView2 ready, notifications via BackgroundWorker\n");
+
+            // EventBridge: WebView event kuyrugundan okuyan kopruyu baslat
+            g_EventBridge = new EventBridge(g_WebViewManager);
             g_EventBridge->Start();
             OutputDebugStringW(L"EventBridge started\n");
         }
@@ -102,6 +119,30 @@ int main() {
                 if (g_WebViewManager) {
                     g_WebViewManager->Resize(LOWORD(msg.lParam), HIWORD(msg.lParam));
                 }
+                continue;
+            }
+            if (msg.message == WM_WEBVIEW_NEWEVENT) {
+                if (g_WebViewManager && g_WebViewManager->GetWebView()) {
+                    g_WebViewManager->GetWebView()->ExecuteScript(
+                        L"if(typeof _debouncedRefresh==='function')_debouncedRefresh();",
+                        nullptr);
+                }
+                continue;
+            }
+            if (msg.message == WM_WEBVIEW_ACTIVEAPP) {
+                std::string* pJson = reinterpret_cast<std::string*>(msg.lParam);
+                if (pJson && g_WebViewManager && g_WebViewManager->GetWebView()) {
+                    int size_needed = MultiByteToWideChar(CP_UTF8, 0,
+                        pJson->c_str(), (int)pJson->length(), NULL, 0);
+                    if (size_needed > 0) {
+                        std::wstring wJson(size_needed, 0);
+                        MultiByteToWideChar(CP_UTF8, 0,
+                            pJson->c_str(), (int)pJson->length(),
+                            &wJson[0], size_needed);
+                        g_WebViewManager->GetWebView()->PostWebMessageAsJson(wJson.c_str());
+                    }
+                }
+                delete pJson;
                 continue;
             }
             TranslateMessage(&msg);
@@ -127,6 +168,7 @@ int main() {
     // 5. MAIN MESSAGE LOOP - This is where WebView2 callbacks execute
     bool done = false;
     while (!done) {
+        auto loopStart = std::chrono::steady_clock::now();
         MSG msg;
         while (::PeekMessage(&msg, nullptr, 0U, 0U, PM_REMOVE)) {
             ::TranslateMessage(&msg);
@@ -134,6 +176,11 @@ int main() {
             if (msg.message == WM_QUIT) done = true;
         }
         if (done) break;
+
+        // Measure UI frame time for perf monitoring
+        auto loopEnd = std::chrono::steady_clock::now();
+        double frameMs = std::chrono::duration<double, std::milli>(loopEnd - loopStart).count();
+        PerfGlobals::ui_frame_time_ms.store(frameMs, std::memory_order_relaxed);
 
         // Small sleep to prevent CPU spinning
         Sleep(10);
@@ -147,6 +194,9 @@ int main() {
     // NOW wait for WebView2 initialization thread to complete
     webviewThread.join();
     OutputDebugStringW(L"WebView2 initialization thread completed\n");
+
+    // Stop perf logger before cleanup
+    perfLogger.Stop();
 
     OutputDebugStringW(L"Cleaning up...\n");
 
@@ -167,10 +217,17 @@ int main() {
     OutputDebugStringW(L"AI Classifier task stopped\n");
 
     WindowTracker::StopTracking();
+
+    // Stop event queue so BackgroundWorker can exit
+    g_EventQueue.stop();
     worker.join();
+
+    // Stop HotkeyWorker thread
+    if (g_HotkeyThreadId != 0) {
+        PostThreadMessageW(g_HotkeyThreadId, WM_QUIT, 0, 0);
+    }
     hotkey.join();
 
-    ::DestroyWindow(hwnd);
     ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
 
     OutputDebugStringW(L"=== VIGILANT Exiting ===\n");

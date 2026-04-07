@@ -1,23 +1,20 @@
-ï»¿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Kaynak Dosyalar">
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
       <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
     </Filter>
-    <Filter Include="Ãœst Bilgi DosyalarÄ±">
+    <Filter Include="Üst Bilgi Dosyalarý">
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
       <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
     </Filter>
-    <Filter Include="Kaynak DosyalarÄ±">
+    <Filter Include="Kaynak Dosyalarý">
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\IdleTracker.cpp">
-      <Filter>Kaynak Dosyalar</Filter>
-    </ClCompile>
     <ClCompile Include="src\Core\WindowTracker.cpp">
       <Filter>Kaynak Dosyalar</Filter>
     </ClCompile>
@@ -33,16 +30,7 @@
     <ClCompile Include="src\UI\WebViewManager.cpp">
       <Filter>Kaynak Dosyalar</Filter>
     </ClCompile>
-    <ClCompile Include="src\main.cpp">
-      <Filter>Kaynak Dosyalar</Filter>
-    </ClCompile>
     <ClCompile Include="src\Globals.cpp">
-      <Filter>Kaynak Dosyalar</Filter>
-    </ClCompile>
-    <ClCompile Include="src\Renderer.cpp">
-      <Filter>Kaynak Dosyalar</Filter>
-    </ClCompile>
-    <ClCompile Include="src\Window.cpp">
       <Filter>Kaynak Dosyalar</Filter>
     </ClCompile>
     <ClCompile Include="src\Workers.cpp">
@@ -51,65 +39,93 @@
     <ClCompile Include="src\Instances.cpp">
       <Filter>Kaynak Dosyalar</Filter>
     </ClCompile>
+    <ClCompile Include="src\AI\AIClassifierTask.cpp">
+      <Filter>Kaynak Dosyalar</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AI\GeminiService.cpp">
+      <Filter>Kaynak Dosyalar</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Utils\EventBridge.cpp">
+      <Filter>Kaynak Dosyalar</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Utils\StartupManager.cpp">
+      <Filter>Kaynak Dosyalar</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Window.cpp">
+      <Filter>Kaynak Dosyalar</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\TrayManager.cpp">
+      <Filter>Kaynak Dosyalar</Filter>
+    </ClCompile>
+    <ClCompile Include="src\main.cpp">
+      <Filter>Kaynak Dosyalar</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="include\IdleTracker.hpp">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
-    </ClInclude>
     <ClInclude Include="include\Core\WindowTracker.hpp">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
     <ClInclude Include="include\UI\BrowserBridge.hpp">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
     <ClInclude Include="include\Utils\EventQueue.hpp">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
     <ClInclude Include="include\Data\DatabaseManager.hpp">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
     <ClInclude Include="vendor\sqlite\sqlite3.h">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
-    <ClInclude Include="vendor\%28imgui%29\imgui_impl_dx11.h">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+    <ClInclude Include="include\AI\AIClassifierTask.hpp">
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
-    <ClInclude Include="vendor\%28imgui%29\imgui_impl_win32.h">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+    <ClInclude Include="include\AI\GeminiService.hpp">
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
-    <ClInclude Include="vendor\(imgui)\imconfig.h">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+    <ClInclude Include="include\Utils\EventBridge.hpp">
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
-    <ClInclude Include="vendor\(imgui)\imgui.h">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+    <ClInclude Include="include\Utils\RingBuffer.hpp">
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
-    <ClInclude Include="vendor\(imgui)\imgui_internal.h">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+    <ClInclude Include="include\Utils\StartupManager.hpp">
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
-    <ClInclude Include="vendor\(imgui)\implot.h">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+    <ClInclude Include="include\UI\TrayManager.hpp">
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
-    <ClInclude Include="vendor\(imgui)\implot_internal.h">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+    <ClInclude Include="include\Utils\PerfCounters.hpp">
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
-    <ClInclude Include="vendor\(imgui)\imstb_rectpack.h">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+    <ClInclude Include="include\Utils\PerfSnapshot.hpp">
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
-    <ClInclude Include="vendor\(imgui)\imstb_textedit.h">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
-    </ClInclude>
-    <ClInclude Include="vendor\(imgui)\imstb_truetype.h">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
-    </ClInclude>
-    <ClInclude Include="include\UI\WebViewManager.hpp">
-      <Filter>Ãœst Bilgi DosyalarÄ±</Filter>
+    <ClInclude Include="include\Utils\ProcessCache.hpp">
+      <Filter>Üst Bilgi Dosyalarý</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="packages.config" />
-    <None Include="web\index.html" />
-    <None Include="dashboard.html" />
-    <None Include="test.html" />
+    <None Include="dashboard_pro.html" />
+    <None Include="ts\dashboard\dom-updater.ts" />
+    <None Include="ts\dashboard\pubsub.ts" />
+    <None Include="ts\dashboard\timer-service.ts" />
+    <None Include="ts\dashboard\timer-store.test.ts" />
+    <None Include="ts\dashboard\timer-store.ts" />
+    <None Include="ts\dashboard\tsconfig.json" />
+    <None Include="ts\dashboard\mood-engine.ts" />
+    <None Include="ts\dashboard\mood-engine.test.ts" />
+    <None Include="ts\gemini\tsconfig.json" />
+    <None Include="ts\gemini\types.ts" />
+    <None Include="ts\gemini\config.ts" />
+    <None Include="ts\gemini\rate-limiter.ts" />
+    <None Include="ts\gemini\logger.ts" />
+    <None Include="ts\gemini\fetch-retry.ts" />
+    <None Include="ts\gemini\gemini-client.ts" />
+    <None Include="ts\gemini\index.ts" />
+    <None Include="ts\gemini\example.ts" />
+    <None Include="docs\OPTIMIZATION_PLAN.md" />
+    <None Include="docs\PERF_RUNBOOK.md" />
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="$(MSBuildThisFileDirectory)..\..\natvis\wil.natvis" />

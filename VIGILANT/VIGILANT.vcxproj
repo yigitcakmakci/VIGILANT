@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -23,34 +23,57 @@
     <ClCompile Include="src\AI\GeminiService.cpp" />
     <ClCompile Include="src\Core\WindowTracker.cpp" />
     <ClCompile Include="src\Instances.cpp" />
-    <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\UI\BrowserBridge.cpp" />
     <ClCompile Include="src\Data\DatabaseManager.cpp" />
-    <ClCompile Include="src\UI\TrayIcon.cpp" />
+    <ClCompile Include="src\UI\TrayManager.cpp" />
     <ClCompile Include="src\Utils\EventBridge.cpp" />
     <ClCompile Include="src\Utils\StartupManager.cpp" />
+    <ClCompile Include="src\Window.cpp" />
     <ClCompile Include="vendor\sqlite\sqlite3.c" />
     <ClCompile Include="src\UI\WebViewManager.cpp" />
     <ClCompile Include="src\Globals.cpp" />
-    <ClCompile Include="src\Window.cpp" />
     <ClCompile Include="src\Workers.cpp" />
+    <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\AI\AIClassifierTask.hpp" />
     <ClInclude Include="include\AI\GeminiService.hpp" />
     <ClInclude Include="include\Core\WindowTracker.hpp" />
     <ClInclude Include="include\UI\BrowserBridge.hpp" />
-    <ClInclude Include="include\UI\TrayIcon.hpp" />
+    <ClInclude Include="include\UI\TrayManager.hpp" />
     <ClInclude Include="include\Utils\EventBridge.hpp" />
     <ClInclude Include="include\Utils\EventQueue.hpp" />
     <ClInclude Include="include\Data\DatabaseManager.hpp" />
+    <ClInclude Include="include\Utils\PerfCounters.hpp" />
+    <ClInclude Include="include\Utils\PerfSnapshot.hpp" />
+    <ClInclude Include="include\Utils\ProcessCache.hpp" />
+    <ClInclude Include="include\Utils\RingBuffer.hpp" />
     <ClInclude Include="include\Utils\StartupManager.hpp" />
     <ClInclude Include="vendor\sqlite\sqlite3.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="dashboard_pro.html" />
-    <None Include="eventbridge_example.js" />
-    <None Include="EventBridge_README.md" />
+    <None Include="docs\OPTIMIZATION_PLAN.md" />
+    <None Include="docs\PERF_RUNBOOK.md" />
+    <None Include="micro-interactions.css" />
+    <None Include="micro-interactions.js" />
+    <None Include="ts\dashboard\dom-updater.ts" />
+    <None Include="ts\dashboard\mood-engine.test.ts" />
+    <None Include="ts\dashboard\mood-engine.ts" />
+    <None Include="ts\dashboard\pubsub.ts" />
+    <None Include="ts\dashboard\timer-service.ts" />
+    <None Include="ts\dashboard\timer-store.test.ts" />
+    <None Include="ts\dashboard\timer-store.ts" />
+    <None Include="ts\dashboard\tsconfig.json" />
+    <None Include="ts\gemini\config.ts" />
+    <None Include="ts\gemini\example.ts" />
+    <None Include="ts\gemini\fetch-retry.ts" />
+    <None Include="ts\gemini\gemini-client.ts" />
+    <None Include="ts\gemini\index.ts" />
+    <None Include="ts\gemini\logger.ts" />
+    <None Include="ts\gemini\rate-limiter.ts" />
+    <None Include="ts\gemini\tsconfig.json" />
+    <None Include="ts\gemini\types.ts" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
@@ -180,12 +203,14 @@
   </ImportGroup>
   <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
     <PropertyGroup>
-      <ErrorText>Bu proje bu bilgisayarda olmayan NuGet paketlerine ba�vuru yap�yor. Bunlar� indirmek i�in NuGet Paket Geri Y�kleme'yi kullan�n.</ErrorText>
+      <ErrorText>Bu proje bu bilgisayarda olmayan NuGet paketlerine ba?vuru yap?yor. Bunlar? indirmek i?in NuGet Paket Geri Y?kleme'yi kullan?n.</ErrorText>
     </PropertyGroup>
     <Error Condition="!Exists('..\packages\Microsoft.Web.WebView2.1.0.3856.49\build\native\Microsoft.Web.WebView2.targets')" Text="$(ErrorText)" />
     <Error Condition="!Exists('..\packages\Microsoft.Windows.ImplementationLibrary.1.0.260126.7\build\native\Microsoft.Windows.ImplementationLibrary.targets')" Text="$(ErrorText)" />
   </Target>
-  <Target Name="CopyDashboard" AfterTargets="Build" Inputs="$(ProjectDir)dashboard_pro.html" Outputs="$(OutDir)dashboard_pro.html">
+  <Target Name="CopyDashboardAssets" AfterTargets="Build">
     <Copy SourceFiles="$(ProjectDir)dashboard_pro.html" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(ProjectDir)micro-interactions.css" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(ProjectDir)micro-interactions.js" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 </Project>

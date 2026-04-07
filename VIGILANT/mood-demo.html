@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mood Atmosphere – Demo</title>
+    <style>
+        /* ── CSS Variable defaults (overwritten by MoodEngine) ── */
+        :root {
+            --accent: 38 92% 50%;
+            --glow: 10px;
+            --vignette-opacity: 0.25;
+            --blur-strength: 8px;
+        }
+
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            min-height: 100vh;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #0b0e17;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        /* ── Vignette overlay ── */
+        .vignette {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 1;
+            background: radial-gradient(ellipse at center, transparent 40%, #0b0e17 100%);
+            opacity: var(--vignette-opacity);
+            transition: opacity 0s; /* engine handles lerp */
+        }
+
+        /* ── Ambient glow orb ── */
+        .glow-orb {
+            position: fixed;
+            top: 50%; left: 50%;
+            width: 500px; height: 500px;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            background: hsl(var(--accent) / .18);
+            filter: blur(100px);
+            box-shadow: 0 0 var(--glow) hsl(var(--accent) / .35);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* ── Content panel ── */
+        .panel {
+            position: relative;
+            z-index: 10;
+            backdrop-filter: blur(var(--blur-strength));
+            -webkit-backdrop-filter: blur(var(--blur-strength));
+            background: rgba(255,255,255,.04);
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 24px;
+            padding: 40px 48px;
+            width: 520px;
+            display: flex;
+            flex-direction: column;
+            gap: 28px;
+        }
+
+        .panel h1 {
+            font-size: 24px;
+            font-weight: 600;
+            color: rgba(255,255,255,.95);
+            letter-spacing: -.02em;
+        }
+
+        /* ── Score display ── */
+        .score-display {
+            text-align: center;
+        }
+        .score-value {
+            font-size: 72px;
+            font-weight: 700;
+            color: hsl(var(--accent));
+            line-height: 1;
+        }
+        .score-label {
+            font-size: 13px;
+            color: rgba(255,255,255,.4);
+            margin-top: 4px;
+        }
+
+        /* ── Slider group ── */
+        .slider-group {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+        .slider-row {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .slider-row label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            color: rgba(255,255,255,.55);
+        }
+        .slider-row label span {
+            color: hsl(var(--accent));
+            font-weight: 600;
+        }
+        input[type=range] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255,255,255,.08);
+            outline: none;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px; height: 18px;
+            border-radius: 50%;
+            background: hsl(var(--accent));
+            cursor: pointer;
+            box-shadow: 0 0 8px hsl(var(--accent) / .5);
+        }
+
+        /* ── Theme vars readout ── */
+        .readout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .readout-item {
+            background: rgba(255,255,255,.04);
+            border: 1px solid rgba(255,255,255,.05);
+            border-radius: 12px;
+            padding: 10px 14px;
+        }
+        .readout-item .ro-label {
+            font-size: 11px;
+            color: rgba(255,255,255,.35);
+        }
+        .readout-item .ro-value {
+            font-size: 15px;
+            color: rgba(255,255,255,.85);
+            margin-top: 2px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* ── Direct score slider ── */
+        .direct-score {
+            padding-top: 16px;
+            border-top: 1px solid rgba(255,255,255,.06);
+        }
+        .direct-score label {
+            font-size: 12px;
+            color: rgba(255,255,255,.4);
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Atmosphere layers -->
+    <div class="vignette"></div>
+    <div class="glow-orb"></div>
+
+    <!-- Content -->
+    <div class="panel">
+        <h1>🌀 Mood Atmosphere</h1>
+
+        <div class="score-display">
+            <div class="score-value" id="scoreValue">0.0</div>
+            <div class="score-label">moodScore (−10 … +10)</div>
+        </div>
+
+        <!-- Metric sliders -->
+        <div class="slider-group">
+            <div class="slider-row">
+                <label>focusSeconds <span id="focusVal">900</span></label>
+                <input type="range" id="focusSlider" min="0" max="1800" value="900">
+            </div>
+            <div class="slider-row">
+                <label>appSwitchCount <span id="switchVal">5</span></label>
+                <input type="range" id="switchSlider" min="0" max="60" value="5">
+            </div>
+            <div class="slider-row">
+                <label>idleRatio <span id="idleVal">0.10</span></label>
+                <input type="range" id="idleSlider" min="0" max="100" value="10">
+            </div>
+        </div>
+
+        <!-- Theme readout -->
+        <div class="readout">
+            <div class="readout-item">
+                <div class="ro-label">--accent</div>
+                <div class="ro-value" id="roAccent">—</div>
+            </div>
+            <div class="readout-item">
+                <div class="ro-label">--glow</div>
+                <div class="ro-value" id="roGlow">—</div>
+            </div>
+            <div class="readout-item">
+                <div class="ro-label">--vignette-opacity</div>
+                <div class="ro-value" id="roVignette">—</div>
+            </div>
+            <div class="readout-item">
+                <div class="ro-label">--blur-strength</div>
+                <div class="ro-value" id="roBlur">—</div>
+            </div>
+        </div>
+
+        <!-- Direct score override -->
+        <div class="direct-score">
+            <label>Direkt Score Override <span id="directVal">0</span></label>
+            <input type="range" id="directSlider" min="-100" max="100" value="0">
+        </div>
+    </div>
+
+    <script type="module">
+        // ── Inline engine (mirrors mood-engine.ts for standalone demo) ─────
+
+        function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+        function lerp(a, b, t) { return a + (b - a) * t; }
+
+        function parseHSL(hsl) {
+            const p = hsl.replace(/%/g, '').split(/\s+/).map(Number);
+            return [p[0], p[1], p[2]];
+        }
+        function hslStr(h, s, l) {
+            return `${Math.round(h)} ${Math.round(s)}% ${Math.round(l)}%`;
+        }
+
+        const FOCUS_W = 1800, SWITCH_SAT = 30, W_F = 10, W_S = 10, W_I = 5;
+
+        function computeMoodScore(m) {
+            const fN = clamp(m.focusSeconds / FOCUS_W, 0, 1);
+            const sN = clamp(m.appSwitchCount / SWITCH_SAT, 0, 1);
+            const iN = clamp(m.idleRatio, 0, 1);
+            return clamp(Math.round((fN * W_F - sN * W_S - iN * W_I) * 10) / 10, -10, 10);
+        }
+
+        const ANCHORS = [
+            { score: -10, theme: { accent: '0 84 60',   glow: 2,  vignetteOpacity: 0.55, blurStrength: 18 } },
+            { score:   0, theme: { accent: '38 92 50',  glow: 10, vignetteOpacity: 0.25, blurStrength: 8  } },
+            { score:  10, theme: { accent: '142 71 45', glow: 24, vignetteOpacity: 0.08, blurStrength: 0  } },
+        ];
+
+        function lerpTheme(a, b, t) {
+            const [ah,as,al] = parseHSL(a.accent);
+            const [bh,bs,bl] = parseHSL(b.accent);
+            return {
+                accent: hslStr(lerp(ah,bh,t), lerp(as,bs,t), lerp(al,bl,t)),
+                glow: lerp(a.glow, b.glow, t),
+                vignetteOpacity: lerp(a.vignetteOpacity, b.vignetteOpacity, t),
+                blurStrength: lerp(a.blurStrength, b.blurStrength, t),
+            };
+        }
+
+        function themeForScore(score) {
+            const s = clamp(score, -10, 10);
+            for (let i = 0; i < ANCHORS.length - 1; i++) {
+                const lo = ANCHORS[i], hi = ANCHORS[i + 1];
+                if (s <= hi.score) {
+                    const t = (s - lo.score) / (hi.score - lo.score);
+                    return lerpTheme(lo.theme, hi.theme, t);
+                }
+            }
+            return { ...ANCHORS[ANCHORS.length - 1].theme };
+        }
+
+        // ── Smooth transition engine ───────────────────────────────────────
+
+        const LERP_SPEED = 3.5;
+        const EPSILON = 0.001;
+        const root = document.documentElement;
+
+        let current = themeForScore(0);
+        let target  = themeForScore(0);
+        let running = false;
+        let lastTime = 0;
+        let rafId = null;
+
+        function applyCSSVars(t) {
+            root.style.setProperty('--accent', t.accent);
+            root.style.setProperty('--glow', `${t.glow}px`);
+            root.style.setProperty('--vignette-opacity', t.vignetteOpacity.toFixed(3));
+            root.style.setProperty('--blur-strength', `${t.blurStrength.toFixed(1)}px`);
+        }
+
+        function converged() {
+            const [ch,cs,cl] = parseHSL(current.accent);
+            const [th,ts,tl] = parseHSL(target.accent);
+            return Math.abs(ch-th) < EPSILON && Math.abs(cs-ts) < EPSILON &&
+                   Math.abs(cl-tl) < EPSILON && Math.abs(current.glow - target.glow) < EPSILON &&
+                   Math.abs(current.vignetteOpacity - target.vignetteOpacity) < EPSILON &&
+                   Math.abs(current.blurStrength - target.blurStrength) < EPSILON;
+        }
+
+        function frame(now) {
+            if (!running) return;
+            const dt = (now - lastTime) / 1000;
+            lastTime = now;
+            const t = 1 - Math.exp(-LERP_SPEED * dt);
+            current = lerpTheme(current, target, t);
+            applyCSSVars(current);
+            updateReadout(current);
+            if (converged()) {
+                current = { ...target };
+                applyCSSVars(current);
+                updateReadout(current);
+                running = false;
+                return;
+            }
+            rafId = requestAnimationFrame(frame);
+        }
+
+        function startTransition(newTarget) {
+            target = newTarget;
+            if (!running) {
+                running = true;
+                lastTime = performance.now();
+                rafId = requestAnimationFrame(frame);
+            }
+        }
+
+        // ── DOM wiring ─────────────────────────────────────────────────────
+
+        const $score    = document.getElementById('scoreValue');
+        const $focusV   = document.getElementById('focusVal');
+        const $switchV  = document.getElementById('switchVal');
+        const $idleV    = document.getElementById('idleVal');
+        const $directV  = document.getElementById('directVal');
+        const $roAccent = document.getElementById('roAccent');
+        const $roGlow   = document.getElementById('roGlow');
+        const $roVig    = document.getElementById('roVignette');
+        const $roBlur   = document.getElementById('roBlur');
+
+        function updateReadout(t) {
+            $roAccent.textContent  = `hsl(${t.accent})`;
+            $roGlow.textContent    = `${t.glow.toFixed(1)}px`;
+            $roVig.textContent     = t.vignetteOpacity.toFixed(3);
+            $roBlur.textContent    = `${t.blurStrength.toFixed(1)}px`;
+        }
+
+        function onMetricChange() {
+            const focusSeconds   = +document.getElementById('focusSlider').value;
+            const appSwitchCount = +document.getElementById('switchSlider').value;
+            const idleRatio      = +document.getElementById('idleSlider').value / 100;
+
+            $focusV.textContent  = String(focusSeconds);
+            $switchV.textContent = String(appSwitchCount);
+            $idleV.textContent   = idleRatio.toFixed(2);
+
+            const score = computeMoodScore({ focusSeconds, appSwitchCount, idleRatio });
+            $score.textContent = score.toFixed(1);
+
+            // Sync direct slider
+            document.getElementById('directSlider').value = String(score * 10);
+            $directV.textContent = score.toFixed(1);
+
+            startTransition(themeForScore(score));
+        }
+
+        function onDirectChange() {
+            const score = +document.getElementById('directSlider').value / 10;
+            $directV.textContent = score.toFixed(1);
+            $score.textContent   = score.toFixed(1);
+            startTransition(themeForScore(score));
+        }
+
+        document.getElementById('focusSlider').addEventListener('input', onMetricChange);
+        document.getElementById('switchSlider').addEventListener('input', onMetricChange);
+        document.getElementById('idleSlider').addEventListener('input', onMetricChange);
+        document.getElementById('directSlider').addEventListener('input', onDirectChange);
+
+        // ── Init ───────────────────────────────────────────────────────────
+        applyCSSVars(current);
+        updateReadout(current);
+        onMetricChange();
+    </script>
+</body>
+</html>

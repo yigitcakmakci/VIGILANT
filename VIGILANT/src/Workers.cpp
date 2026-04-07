@@ -1,28 +1,71 @@
-#include <windows.h>
+﻿#include <windows.h>
 #include <thread>
 #include <chrono>
-#include <iostream>
 #include "Utils/EventQueue.hpp"
+#include "Utils/PerfCounters.hpp"
 #include "Data/DatabaseManager.hpp"
+#include "UI/TrayManager.hpp"
+
+#define WM_WEBVIEW_NEWEVENT (WM_APP + 2)
 
 extern DatabaseManager g_Vault;
 extern EventQueue g_EventQueue;
+extern DWORD g_WebViewThreadId;
 
 // --- BackgroundWorker ---
-// Olaylari kuyruktan alir, DB'ye yazar ve onceki aktivitenin suresini gunceller.
-// AI siniflandirma artik AIClassifierTask tarafindan bagimsiz thread'de yapilir.
+// Olaylari kuyruktan alir, batch transaction ile DB'ye yazar.
+// Batch kosulu: N event birikince VEYA T saniye dolunca (hangisi once).
+static constexpr int    kBatchMaxSize    = 10;
+static constexpr int    kBatchFlushMs    = 2000; // 2 saniye
+
 void BackgroundWorker()
 {
     int lastActivityId = -1;
     auto lastTime = std::chrono::steady_clock::now();
+    auto lastFlush = std::chrono::steady_clock::now();
+    int batchCount = 0;
+    bool inTransaction = false;
+
+    // pop_for timeout: half of batch flush interval so we check frequently
+    static constexpr int kPopTimeoutMs = kBatchFlushMs / 2;
 
     while (true)
     {
         EventData data;
-        if (!g_EventQueue.pop(data))
-            break; // stop flag + kuyruk bos
+        int status = 0;
+        g_EventQueue.pop_for(data, kPopTimeoutMs, status);
 
+        // stop flag raised and queue drained
+        if (status == 2) break;
+
+        // timeout - no new event arrived, but we may need to flush pending batch
+        if (status == 1) {
+            if (inTransaction) {
+                auto now = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFlush).count();
+                if (elapsed >= kBatchFlushMs) {
+                    PERF_SCOPED_TIMER(db_batch_commit);
+                    g_Vault.commitTransaction();
+                    inTransaction = false;
+                    batchCount = 0;
+                    // Dashboard bilgilendirmesi YAPILMIYOR — ilk event
+                    // isleme adimindan (asagida) zaten gonderiliyor.
+                    // Bu ikinci bildirim gereksiz DOM yeniden insa ve
+                    // kullanici etkilesimi engellemesine yol aciyordu.
+                }
+            }
+            continue;
+        }
+
+        // --- status == 0: yeni event geldi ---
         auto now = std::chrono::steady_clock::now();
+
+        // Start batch transaction if not already in one
+        if (!inTransaction) {
+            g_Vault.beginTransaction();
+            inTransaction = true;
+            lastFlush = now;
+        }
 
         // Onceki aktivitenin suresini guncelle
         if (lastActivityId > 0) {
@@ -33,24 +76,48 @@ void BackgroundWorker()
             }
         }
 
-        // Yeni aktiviteyi kaydet
+        // Yeni aktiviteyi kaydet (prepared statement - no prepare/finalize overhead)
         lastActivityId = g_Vault.logActivity(data);
         lastTime = now;
+        batchCount++;
+
+        // Flush batch: N events OR T seconds elapsed
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFlush).count();
+        if (batchCount >= kBatchMaxSize || elapsed >= kBatchFlushMs) {
+            PERF_SCOPED_TIMER(db_batch_commit);
+            g_Vault.commitTransaction();
+            inTransaction = false;
+            batchCount = 0;
+        }
+
+        // DB yazimi tamamlandiktan sonra dashboard'u bilgilendir
+        if (g_WebViewThreadId != 0) {
+            PostThreadMessageW(g_WebViewThreadId, WM_WEBVIEW_NEWEVENT, 0, 0);
+        }
+    }
+
+    // Flush remaining batch on shutdown
+    if (inTransaction) {
+        g_Vault.commitTransaction();
     }
 }
 
 // --- HotkeyWorker ---
 // Ctrl+Shift+V: Pencereyi goster/gizle
 // Ctrl+Shift+Q: Uygulamayi kapat
+extern DWORD g_HotkeyThreadId;
+
 void HotkeyWorker()
 {
+    g_HotkeyThreadId = GetCurrentThreadId();
+
     const int HOTKEY_TOGGLE = 1;
     const int HOTKEY_QUIT   = 2;
 
     RegisterHotKey(NULL, HOTKEY_TOGGLE, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'V');
     RegisterHotKey(NULL, HOTKEY_QUIT,   MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'Q');
 
-    std::cout << "[Hotkey] Kisayollar aktif: Ctrl+Shift+V (Goster/Gizle), Ctrl+Shift+Q (Kapat)" << std::endl;
+    OutputDebugStringW(L"[Hotkey] Kisayollar aktif: Ctrl+Shift+V (Goster/Gizle), Ctrl+Shift+Q (Kapat)\n");
 
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0))
@@ -63,17 +130,17 @@ void HotkeyWorker()
             if (msg.wParam == HOTKEY_TOGGLE) {
                 if (IsWindowVisible(hwnd)) {
                     ShowWindow(hwnd, SW_HIDE);
-                    std::cout << "[Hotkey] Pencere gizlendi." << std::endl;
+                    OutputDebugStringW(L"[Hotkey] Pencere gizlendi.\n");
                 }
                 else {
                     ShowWindow(hwnd, SW_SHOW);
                     SetForegroundWindow(hwnd);
-                    std::cout << "[Hotkey] Pencere gosterildi." << std::endl;
+                    OutputDebugStringW(L"[Hotkey] Pencere gosterildi.\n");
                 }
             }
             else if (msg.wParam == HOTKEY_QUIT) {
-                std::cout << "[Hotkey] Kapatma istegi alindi." << std::endl;
-                PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                OutputDebugStringW(L"[Hotkey] Kapatma istegi alindi.\n");
+                PostMessageW(hwnd, WM_COMMAND, MAKEWPARAM(ID_TRAY_QUIT, 0), 0);
                 break;
             }
         }

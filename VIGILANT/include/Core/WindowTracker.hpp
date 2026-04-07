@@ -15,6 +15,7 @@ public:
 private:
     static HWINEVENTHOOK hHookForeground;
     static HWINEVENTHOOK hHookNameChange;
+    static ULONGLONG s_lastEventTick;
 };
 
 #endif

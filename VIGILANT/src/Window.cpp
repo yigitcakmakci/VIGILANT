@@ -1,16 +1,21 @@
 #include <windows.h>
 #include "UI/WebViewManager.hpp"
-#include "UI/TrayIcon.hpp"
+#include "UI/TrayManager.hpp"
 
 #define WM_WEBVIEW_RESIZE (WM_APP + 1)
 
 extern WebViewManager* g_WebViewManager;
 extern DWORD g_WebViewThreadId;
 
-TrayIcon g_TrayIcon;
+TrayManager g_TrayManager;
 
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    // Let TrayManager handle tray icon and context-menu messages first
+    LRESULT trayResult = 0;
+    if (g_TrayManager.HandleMessage(hWnd, msg, wParam, lParam, trayResult))
+        return trayResult;
+
     switch (msg)
     {
     case WM_SIZE:
@@ -37,32 +42,8 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         ::ShowWindow(hWnd, SW_HIDE);
         return 0;
 
-    case WM_TRAYICON:
-        if (lParam == WM_RBUTTONUP) {
-            g_TrayIcon.ShowContextMenu(hWnd);
-        }
-        else if (lParam == WM_LBUTTONDBLCLK) {
-            ::ShowWindow(hWnd, SW_RESTORE);
-            ::SetForegroundWindow(hWnd);
-        }
-        return 0;
-
-    case WM_COMMAND:
-        switch (LOWORD(wParam))
-        {
-        case ID_TRAY_SHOW:
-            ::ShowWindow(hWnd, SW_RESTORE);
-            ::SetForegroundWindow(hWnd);
-            return 0;
-        case ID_TRAY_EXIT:
-            g_TrayIcon.Remove();
-            ::DestroyWindow(hWnd);
-            return 0;
-        }
-        break;
-
     case WM_DESTROY:
-        g_TrayIcon.Remove();
+        g_TrayManager.Destroy();
         ::PostQuitMessage(0);
         return 0;
     }

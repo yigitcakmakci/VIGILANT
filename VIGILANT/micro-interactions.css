@@ -1,0 +1,307 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   VIGILANT – Micro-Interactions Design System
+   CSS custom properties (tokens) + Tailwind-convention utility classes.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. DESIGN TOKENS ──────────────────────────────────────────────── */
+:root {
+    /* Duration tokens – Material 3 inspired, dashboard-tuned */
+    --duration-instant:  80ms;
+    --duration-fast:    150ms;
+    --duration-normal:  250ms;
+    --duration-slow:    400ms;
+    --duration-slower:  600ms;
+
+    /* Easing tokens – named cubic-beziers */
+    --ease-default:     cubic-bezier(0.4, 0.0, 0.2, 1.0);   /* standard Material  */
+    --ease-in:          cubic-bezier(0.4, 0.0, 1.0, 1.0);   /* accelerate          */
+    --ease-out:         cubic-bezier(0.0, 0.0, 0.2, 1.0);   /* decelerate          */
+    --ease-in-out:      cubic-bezier(0.4, 0.0, 0.2, 1.0);   /* symmetric           */
+    --ease-bounce:      cubic-bezier(0.34, 1.56, 0.64, 1);   /* overshoot-snap      */
+    --ease-spring:      cubic-bezier(0.22, 1.0, 0.36, 1.0);  /* spring settle       */
+
+    /* Skeleton shimmer */
+    --skeleton-base:    rgba(255, 255, 255, 0.06);
+    --skeleton-shine:   rgba(255, 255, 255, 0.12);
+}
+
+
+/* ── 2. DURATION UTILITIES ─────────────────────────────────────────── */
+.duration-instant  { transition-duration: var(--duration-instant)  !important; }
+.duration-fast     { transition-duration: var(--duration-fast)     !important; }
+.duration-normal   { transition-duration: var(--duration-normal)   !important; }
+.duration-slow     { transition-duration: var(--duration-slow)     !important; }
+.duration-slower   { transition-duration: var(--duration-slower)   !important; }
+
+
+/* ── 3. EASING UTILITIES ───────────────────────────────────────────── */
+.ease-default  { transition-timing-function: var(--ease-default)  !important; }
+.ease-in       { transition-timing-function: var(--ease-in)       !important; }
+.ease-out      { transition-timing-function: var(--ease-out)      !important; }
+.ease-in-out   { transition-timing-function: var(--ease-in-out)   !important; }
+.ease-bounce   { transition-timing-function: var(--ease-bounce)   !important; }
+.ease-spring   { transition-timing-function: var(--ease-spring)   !important; }
+
+
+/* ── 4. INTERACTION FEEDBACK UTILITIES ─────────────────────────────── */
+.hover-lift {
+    transition: transform var(--duration-fast) var(--ease-spring),
+                box-shadow var(--duration-fast) var(--ease-default);
+}
+.hover-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.hover-glow {
+    transition: box-shadow var(--duration-normal) var(--ease-default);
+}
+.hover-glow:hover {
+    box-shadow: 0 0 20px rgba(52, 211, 153, 0.15);
+}
+
+.press-scale {
+    transition: transform var(--duration-instant) var(--ease-default);
+}
+.press-scale:active {
+    transform: scale(0.97);
+}
+
+.focus-ring:focus-visible {
+    outline: 2px solid rgba(52, 211, 153, 0.6);
+    outline-offset: 2px;
+}
+
+
+/* ── 5. EXPAND / COLLAPSE  (CSS Grid 0fr → 1fr) ───────────────────── */
+/*
+   Why grid-template-rows and not max-height:
+     • max-height requires guessing a ceiling value; timing skews if actual
+       height ≠ max-height. Overflow clips unpredictably.
+     • scale distorts content and shifts surrounding layout.
+     • grid-template-rows: 0fr → 1fr is content-height-agnostic, subpixel-
+       smooth, and keeps layout flow intact.
+
+   Usage:
+     <div class="vc-expand" aria-expanded="false">    ← JS toggles aria
+       <div class="vc-expand__inner">
+         … any content …
+       </div>
+     </div>
+*/
+.vc-expand {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows var(--duration-slow) var(--ease-spring);
+}
+.vc-expand[aria-expanded="true"] {
+    grid-template-rows: 1fr;
+}
+.vc-expand__inner {
+    overflow: hidden;
+}
+/* Optional fade-in for expand content */
+.vc-expand__inner > * {
+    opacity: 0;
+    transition: opacity var(--duration-normal) var(--ease-out);
+    transition-delay: 0ms;
+}
+.vc-expand[aria-expanded="true"] .vc-expand__inner > * {
+    opacity: 1;
+    transition-delay: 100ms;
+}
+
+
+/* ── 6. TOOLTIP  (Accessible) ──────────────────────────────────────── */
+/*
+   Structure:
+     <span class="vc-tooltip" data-tip="Label text">
+       <button aria-describedby="tip-xxx"> trigger </button>
+       <span class="vc-tooltip__bubble" role="tooltip" id="tip-xxx">
+         Label text
+       </span>
+     </span>
+*/
+.vc-tooltip {
+    position: relative;
+    display: inline-flex;
+}
+.vc-tooltip__bubble {
+    /* layout */
+    position: absolute;
+    z-index: 9999;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%) translateY(4px);
+    /* visual */
+    padding: 6px 12px;
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
+    pointer-events: none;
+    /* animation */
+    opacity: 0;
+    transition: opacity var(--duration-fast) var(--ease-out),
+                transform var(--duration-fast) var(--ease-out);
+}
+/* Arrow */
+.vc-tooltip__bubble::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: rgba(15, 23, 42, 0.95);
+}
+/* Show on hover / focus-within */
+.vc-tooltip:hover .vc-tooltip__bubble,
+.vc-tooltip:focus-within .vc-tooltip__bubble {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* Position variants */
+.vc-tooltip--bottom .vc-tooltip__bubble {
+    bottom: auto;
+    top: calc(100% + 8px);
+    transform: translateX(-50%) translateY(-4px);
+}
+.vc-tooltip--bottom:hover .vc-tooltip__bubble,
+.vc-tooltip--bottom:focus-within .vc-tooltip__bubble {
+    transform: translateX(-50%) translateY(0);
+}
+.vc-tooltip--bottom .vc-tooltip__bubble::after {
+    top: auto;
+    bottom: 100%;
+    border-top-color: transparent;
+    border-bottom-color: rgba(15, 23, 42, 0.95);
+}
+
+
+/* ── 7. SKELETON LOADING ───────────────────────────────────────────── */
+/*
+   Usage:
+     <div class="vc-skeleton vc-skeleton--text" style="--sk-w:60%"></div>
+     <div class="vc-skeleton vc-skeleton--circle"></div>
+     <div class="vc-skeleton vc-skeleton--card"></div>
+*/
+@keyframes skeletonShimmer {
+    0%   { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+
+.vc-skeleton {
+    background: linear-gradient(
+        90deg,
+        var(--skeleton-base) 25%,
+        var(--skeleton-shine) 50%,
+        var(--skeleton-base) 75%
+    );
+    background-size: 200% 100%;
+    animation: skeletonShimmer 1.8s var(--ease-in-out) infinite;
+    border-radius: 8px;
+}
+
+.vc-skeleton--text {
+    height: 14px;
+    width: var(--sk-w, 100%);
+    border-radius: 6px;
+}
+.vc-skeleton--heading {
+    height: 22px;
+    width: var(--sk-w, 45%);
+    border-radius: 6px;
+}
+.vc-skeleton--circle {
+    width: var(--sk-size, 40px);
+    height: var(--sk-size, 40px);
+    border-radius: 50%;
+}
+.vc-skeleton--rect {
+    width: var(--sk-w, 100%);
+    height: var(--sk-h, 120px);
+    border-radius: 12px;
+}
+.vc-skeleton--card {
+    width: 100%;
+    height: var(--sk-h, 160px);
+    border-radius: 16px;
+}
+
+/* Skeleton stat-card composite */
+.vc-skeleton-stat {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+
+/* ── 8. FADE / SLIDE ENTER UTILITIES ───────────────────────────────── */
+.fade-enter {
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity var(--duration-normal) var(--ease-out),
+                transform var(--duration-normal) var(--ease-out);
+}
+.fade-enter.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.slide-up-enter {
+    opacity: 0;
+    transform: translateY(16px);
+    transition: opacity var(--duration-slow) var(--ease-spring),
+                transform var(--duration-slow) var(--ease-spring);
+}
+.slide-up-enter.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+
+/* ── 9. prefers-reduced-motion ─────────────────────────────────────── */
+/*
+   Strategy: kill ALL non-essential motion. Skeleton keeps shimmer but
+   uses a gentler opacity pulse instead.
+*/
+@media (prefers-reduced-motion: reduce) {
+    /* Kill all transitions globally */
+    *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    /* Expand/collapse: instant open/close, no grid-row anim */
+    .vc-expand {
+        transition: none !important;
+    }
+    .vc-expand__inner > * {
+        transition: none !important;
+        opacity: 1 !important;
+    }
+
+    /* Tooltip: just show/hide, no slide */
+    .vc-tooltip__bubble {
+        transition: none !important;
+    }
+
+    /* Skeleton: replace shimmer with subtle opacity pulse */
+    .vc-skeleton {
+        animation: none !important;
+        background: var(--skeleton-base) !important;
+    }
+
+    /* Disable hover transforms */
+    .hover-lift:hover,
+    .press-scale:active {
+        transform: none !important;
+    }
+}

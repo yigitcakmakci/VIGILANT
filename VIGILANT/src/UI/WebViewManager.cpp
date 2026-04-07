@@ -2,6 +2,7 @@
 #include <shlobj.h>
 #include "Data/DatabaseManager.hpp"
 #include "AI/GeminiService.hpp"
+#include "Utils/StartupManager.hpp"
 #include <sstream>
 
 extern DatabaseManager g_Vault;
@@ -360,7 +361,8 @@ std::string WebViewManager::HandleMessage(const std::string& message) {
                 response += "\"title\":\"" + EscapeJson(log.title) + "\",";
                 response += "\"category\":\"" + EscapeJson(log.category) + "\",";
                 response += "\"score\":" + std::to_string(log.score) + ",";
-                response += "\"duration\":" + std::to_string(log.duration) + "}";
+                response += "\"duration\":" + std::to_string(log.duration) + ",";
+                response += "\"source\":\"" + EscapeJson(log.source) + "\"}";
                 if (i < logs.size() - 1) response += ",";
             }
             response += "]";
@@ -427,6 +429,91 @@ std::string WebViewManager::HandleMessage(const std::string& message) {
                     OutputDebugStringW(L"[WebViewManager] AI kategorize tamamlandi\n");
                 }
             }
+        }
+        else if (message.find("saveCategoryOverride") != std::string::npos) {
+            // Parse: exePath, titlePattern, category, score
+            auto extractStr = [&](const std::string& key) -> std::string {
+                size_t pos = message.find("\"" + key + "\"");
+                if (pos == std::string::npos) return "";
+                size_t colon = message.find(":", pos);
+                if (colon == std::string::npos) return "";
+                size_t qStart = message.find("\"", colon + 1);
+                if (qStart == std::string::npos) return "";
+                size_t qEnd = message.find("\"", qStart + 1);
+                if (qEnd == std::string::npos) return "";
+                return message.substr(qStart + 1, qEnd - qStart - 1);
+            };
+            auto extractInt = [&](const std::string& key) -> int {
+                size_t pos = message.find("\"" + key + "\"");
+                if (pos == std::string::npos) return 0;
+                size_t colon = message.find(":", pos);
+                if (colon == std::string::npos) return 0;
+                size_t start = message.find_first_not_of(" \t", colon + 1);
+                if (start == std::string::npos) return 0;
+                return std::atoi(message.c_str() + start);
+            };
+
+            std::string exePath = extractStr("exePath");
+            std::string titlePattern = extractStr("titlePattern");
+            std::string category = extractStr("category");
+            int score = extractInt("score");
+
+            if (titlePattern.empty()) titlePattern = "*";
+
+            bool ok = g_Vault.saveCategoryOverride(exePath, titlePattern, category, score);
+            response = "{\"status\":\"" + std::string(ok ? "success" : "error") + "\"";
+            if (!requestId.empty()) response += ",\"requestId\":" + requestId;
+            response += "}";
+        }
+        else if (message.find("getOverrideRules") != std::string::npos) {
+            auto rules = g_Vault.getOverrideRules();
+            response = "{\"rules\":[";
+            for (size_t i = 0; i < rules.size(); i++) {
+                const auto& r = rules[i];
+                response += "{\"exePath\":\"" + EscapeJson(r.exePath) + "\",";
+                response += "\"titlePattern\":\"" + EscapeJson(r.titlePattern) + "\",";
+                response += "\"category\":\"" + EscapeJson(r.category) + "\",";
+                response += "\"score\":" + std::to_string(r.score) + ",";
+                response += "\"createdAt\":\"" + EscapeJson(r.createdAt) + "\",";
+                response += "\"updatedAt\":\"" + EscapeJson(r.updatedAt) + "\"}";
+                if (i < rules.size() - 1) response += ",";
+            }
+            response += "]";
+            if (!requestId.empty()) response += ",\"requestId\":" + requestId;
+            response += "}";
+        }
+        else if (message.find("getOverrideAuditLog") != std::string::npos) {
+            auto auditJson = g_Vault.getOverrideAuditLog(50);
+            nlohmann::json resp;
+            resp["audit"] = auditJson;
+            if (!requestId.empty()) resp["requestId"] = requestId;
+            response = resp.dump();
+        }
+        // ── Autostart Toggle API ───────────────────────────────────
+        // JS: postMessage({ type: "getAutostartStatus" })
+        // JS: postMessage({ type: "setAutostart", enabled: true/false, method: "registry"|"taskscheduler" })
+        else if (message.find("getAutostartStatus") != std::string::npos) {
+            bool reg = StartupManager::IsAutostartEnabled(AutostartMethod::Registry);
+            bool task = StartupManager::IsAutostartEnabled(AutostartMethod::TaskScheduler);
+            response = "{\"registry\":" + std::string(reg ? "true" : "false") +
+                       ",\"taskScheduler\":" + std::string(task ? "true" : "false");
+            if (!requestId.empty()) response += ",\"requestId\":" + requestId;
+            response += "}";
+        }
+        else if (message.find("setAutostart") != std::string::npos) {
+            bool enable = (message.find("\"enabled\":true") != std::string::npos ||
+                           message.find("\"enabled\": true") != std::string::npos);
+            AutostartMethod method = AutostartMethod::Registry;
+            if (message.find("\"method\":\"taskscheduler\"") != std::string::npos ||
+                message.find("\"method\": \"taskscheduler\"") != std::string::npos) {
+                method = AutostartMethod::TaskScheduler;
+            }
+
+            bool ok = enable ? StartupManager::EnableAutostart(method)
+                             : StartupManager::DisableAutostart(method);
+            response = "{\"status\":\"" + std::string(ok ? "success" : "error") + "\"";
+            if (!requestId.empty()) response += ",\"requestId\":" + requestId;
+            response += "}";
         }
     } catch (const std::exception& e) {
         response = "{\"error\":\"" + std::string(e.what()) + "\"";

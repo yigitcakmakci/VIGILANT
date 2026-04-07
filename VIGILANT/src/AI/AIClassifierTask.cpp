@@ -98,6 +98,19 @@ void AIClassifierTask::runClassification() {
     ClassifierLog("[AITask] " + std::to_string(unknowns.size())
                   + " kategorize edilmemis aktivite bulundu.");
 
+    // 1.5. Override kurallari varsa oncelikli uygula
+    size_t beforeOverride = unknowns.size();
+    m_db.applyOverrides(unknowns);
+    size_t overridden = beforeOverride - unknowns.size();
+    if (overridden > 0) {
+        ClassifierLog("[AITask] " + std::to_string(overridden)
+                      + " aktivite override kurallarıyla siniflandirildi.");
+    }
+    if (unknowns.empty()) {
+        ClassifierLog("[AITask] Tum aktiviteler override ile karsilandi, AI cagrilmayacak.");
+        return;
+    }
+
     // 2. Batch'ler halinde AI'a gonder
     size_t total = unknowns.size();
     size_t processed = 0;

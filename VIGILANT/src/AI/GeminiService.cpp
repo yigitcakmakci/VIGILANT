@@ -213,6 +213,12 @@ std::vector<AILabel> GeminiService::parseResponse(const std::string& rawText) {
 
             if (process.empty() || category.empty()) continue;
 
+            // AI bazen "Unknown" veya "Uncategorized" donebilir — bunlari atla
+            if (category == "Unknown" || category == "unknown" || category == "Uncategorized") {
+                DebugLog("[AI] Gecersiz kategori atlanıyor: " + process + " -> " + category);
+                continue;
+            }
+
             // Skor stringinden sayi olmayan karakterleri temizle ("+10" -> "10")
             std::string cleanScore;
             for (char c : scoreStr) {

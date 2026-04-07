@@ -11,10 +11,34 @@
             _initDone: false,
             init: function() {
                 if (this._initDone) return;
+                if (!window.chrome || !window.chrome.webview) return;
                 this._initDone = true;
                 var self = this;
                 window.chrome.webview.addEventListener('message', function(e) {
                     var data = e.data;
+                    // EventBridge'den gelen pencere degisim olaylarini dinle
+                    if (data && data.type === 'windowEvent') {
+                        // Sadece program degisiminde guncelleme yapilir (ActiveAppChanged)
+                        return;
+                    }
+                    if (data && data.type === 'ActiveAppChanged') {
+                        _handleActiveAppChanged(data.payload);
+                        _debouncedRefresh();
+                        return;
+                    }
+                    if (data && data.type === 'appIconResponse') {
+                        _handleAppIconResponse(data);
+                        return;
+                    }
+                    // Timer Service: idle events from native side
+                    if (data && data.type === 'idleStart') {
+                        if (typeof _timerService !== 'undefined') _timerService.onIdleStart();
+                        return;
+                    }
+                    if (data && data.type === 'idleEnd') {
+                        if (typeof _timerService !== 'undefined') _timerService.onIdleEnd();
+                        return;
+                    }
                     var rid = data && data.requestId != null ? String(data.requestId) : null;
                     if (rid && self._pending[rid]) {
                         self._pending[rid](data);
@@ -24,6 +48,9 @@
             },
             _request: function(type, extra) {
                 this.init();
+                if (!this._initDone) {
+                    return Promise.reject(new Error('WebView bridge not ready'));
+                }
                 var self = this;
                 return new Promise(function(resolve) {
                     var id = String(self._nextId++);
@@ -35,21 +62,170 @@
             getActivityLogs: function(limit) { return this._request('getActivityLogs', {limit: limit || 50}); },
             getProductivityData: function() { return this._request('getProductivityData'); },
             getDashboardSummary: function() { return this._request('getDashboardSummary'); },
-            categorizeWithAI: function() { return this._request('categorizeWithAI'); }
+            categorizeWithAI: function() { return this._request('categorizeWithAI'); },
+            saveCategoryOverride: function(exePath, titlePattern, category, score) {
+                return this._request('saveCategoryOverride', {
+                    exePath: exePath, titlePattern: titlePattern || '*',
+                    category: category, score: score || 0
+                });
+            },
+            getOverrideRules: function() { return this._request('getOverrideRules'); },
+            getOverrideAuditLog: function() { return this._request('getOverrideAuditLog'); }
         };
     </script>
+    <link rel="stylesheet" href="micro-interactions.css">
     <style>
+        /* ── Mood Engine CSS Variables (driven by mood-engine.js) ── */
+        :root {
+            --mood-accent: 38 92% 50%;
+            --mood-glow: 10px;
+            --mood-vignette-opacity: 0.25;
+            --mood-blur-strength: 8px;
+        }
+
+        /* ── Mood Vignette Overlay ── */
+        .mood-vignette {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 2;
+            background: radial-gradient(ellipse at center, transparent 40%, #0b0e17 100%);
+            opacity: var(--mood-vignette-opacity);
+        }
+
+        /* ── Mood Glow Orb ── */
+        .mood-glow-orb {
+            position: fixed;
+            top: 50%; left: 50%;
+            width: 600px; height: 600px;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            background: hsl(var(--mood-accent) / .12);
+            filter: blur(120px);
+            box-shadow: 0 0 var(--mood-glow) hsl(var(--mood-accent) / .25);
+            pointer-events: none;
+            z-index: 0;
+            transition: box-shadow 0s, background 0s;
+        }
+
+        /* ── Mood Score Badge ── */
+        .mood-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 99px;
+            background: rgba(255,255,255,.05);
+            border: 1px solid rgba(255,255,255,.08);
+            transition: border-color .6s ease, background .6s ease;
+        }
+        .mood-badge .mood-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: hsl(var(--mood-accent));
+            box-shadow: 0 0 6px hsl(var(--mood-accent) / .5);
+            transition: background .6s ease, box-shadow .6s ease;
+        }
+        .mood-badge .mood-label {
+            font-size: 12px;
+            color: rgba(255,255,255,.6);
+        }
+        .mood-badge .mood-value {
+            font-size: 12px;
+            font-weight: 600;
+            color: hsl(var(--mood-accent));
+            font-variant-numeric: tabular-nums;
+            transition: color .6s ease;
+        }
+
+        /* ── Live Timer Widget ── */
+        .live-timer-card { padding: 16px 20px; display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+        .live-timer-icon { width: 40px; height: 40px; border-radius: 12px; background: rgba(52,211,153,.12); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .live-timer-icon svg { width: 20px; height: 20px; color: #34d399; }
+        .live-timer-body { flex: 1; min-width: 0; }
+        .live-timer-elapsed { font-size: 28px; font-weight: 700; color: #34d399; font-variant-numeric: tabular-nums; line-height: 1.1; }
+        .live-timer-app { font-size: 13px; color: rgba(255,255,255,.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+        .live-timer-idle-badge { display: none; padding: 3px 10px; border-radius: 99px; background: rgba(251,191,36,.15); color: #fbbf24; font-size: 11px; font-weight: 600; letter-spacing: .03em; }
+        .session-history-card { padding: 16px 20px; }
+        .session-history-title { font-size: 13px; color: rgba(255,255,255,.5); margin-bottom: 10px; }
+        .session-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.04); }
+        .session-row:last-child { border-bottom: none; }
+        .session-app { font-size: 13px; color: rgba(255,255,255,.7); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+        .session-dur { font-size: 13px; color: rgba(255,255,255,.4); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+
+        /* ── Gemini Narrative Card ── */
+        .narrative-card { padding: 20px; }
+        .narrative-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+        .narrative-header svg { width: 18px; height: 18px; color: #a78bfa; }
+        .narrative-header h3 { font-size: 14px; color: rgba(255,255,255,.8); font-weight: 600; }
+        .narrative-btn { margin-left: auto; padding: 5px 12px; border-radius: 8px; border: 1px solid rgba(167,139,250,.3); background: rgba(167,139,250,.1); color: #a78bfa; font-size: 11px; font-weight: 600; cursor: pointer; transition: background .2s, border-color .2s; }
+        .narrative-btn:hover { background: rgba(167,139,250,.2); border-color: rgba(167,139,250,.5); }
+        .narrative-btn:disabled { opacity: .4; cursor: default; }
+        .narrative-text { font-size: 13px; line-height: 1.6; color: rgba(255,255,255,.6); margin-bottom: 12px; }
+        .narrative-insights { list-style: none; padding: 0; }
+        .narrative-insights li { font-size: 12px; color: rgba(255,255,255,.5); padding: 4px 0 4px 16px; position: relative; }
+        .narrative-insights li::before { content: '→'; position: absolute; left: 0; color: #a78bfa; }
+
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes floatingDark {
+            0%   { transform: translate(0, 0) scale(1);        opacity: .65; }
+            20%  { transform: translate(50px, -60px) scale(1.08);  opacity: .90; }
+            40%  { transform: translate(-40px, -25px) scale(1.03); opacity: .70; }
+            60%  { transform: translate(30px, 55px) scale(1.10);   opacity: 1; }
+            80%  { transform: translate(-55px, 30px) scale(1.02);  opacity: .72; }
+            100% { transform: translate(0, 0) scale(1);        opacity: .65; }
+        }
+
+        /* ── Atmospheric Image Background ── */
+        @keyframes atmoDrift1 {
+            0%   { transform: translate(0, 0) scale(1.05); }
+            25%  { transform: translate(15px, -20px) scale(1.08); }
+            50%  { transform: translate(-10px, 10px) scale(1.05); }
+            75%  { transform: translate(20px, 15px) scale(1.07); }
+            100% { transform: translate(0, 0) scale(1.05); }
+        }
+        @keyframes atmoDrift2 {
+            0%   { transform: translate(0, 0) scale(1.10); }
+            33%  { transform: translate(-25px, 20px) scale(1.13); }
+            66%  { transform: translate(20px, -15px) scale(1.08); }
+            100% { transform: translate(0, 0) scale(1.10); }
+        }
+        @keyframes atmoDrift3 {
+            0%   { transform: translate(0, 0) scale(1.15); }
+            20%  { transform: translate(30px, -25px) scale(1.18); }
+            40%  { transform: translate(-20px, 30px) scale(1.12); }
+            60%  { transform: translate(25px, 10px) scale(1.16); }
+            80%  { transform: translate(-15px, -20px) scale(1.13); }
+            100% { transform: translate(0, 0) scale(1.15); }
+        }
+
+        .atmo-bg { position: fixed; inset: -60px; z-index: -1; pointer-events: none; overflow: hidden; }
+        .atmo-bg__layer {
+            position: absolute; inset: -10%;
+            background: url('image_09aa42.png') center / cover no-repeat;
+            will-change: transform, opacity;
+            translate: var(--px, 0) var(--py, 0);
+        }
+        .atmo-bg__layer--1 { opacity: .55; animation: atmoDrift1 120s ease-in-out infinite; }
+        .atmo-bg__layer--2 { opacity: .30; filter: blur(8px) saturate(1.2); animation: atmoDrift2 90s ease-in-out infinite; }
+        .atmo-bg__layer--3 { opacity: .18; filter: blur(24px) saturate(.8); animation: atmoDrift3 60s ease-in-out infinite; }
+
+        @media (prefers-reduced-motion: reduce) {
+            .atmo-bg__layer, .dark-layer { animation: none !important; }
+        }
 
         *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { height: 100%; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; background: #0b0e17; color: #fff; overflow: hidden; }
 
         /* Ambient Glow */
         .ambient { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
-        .ambient .g1 { position: absolute; top: -20%; left: 20%; width: 600px; height: 600px; background: rgba(52,211,153,.07); border-radius: 50%; filter: blur(120px); }
-        .ambient .g2 { position: absolute; bottom: -10%; right: 10%; width: 500px; height: 500px; background: rgba(37,99,235,.06); border-radius: 50%; filter: blur(120px); }
+        .ambient .g1 { position: absolute; top: -20%; left: 20%; width: 700px; height: 700px; background: rgba(52,211,153,.12); border-radius: 50%; filter: blur(120px); }
+        .ambient .g2 { position: absolute; bottom: -10%; right: 10%; width: 600px; height: 600px; background: rgba(37,99,235,.10); border-radius: 50%; filter: blur(120px); }
+
+        /* Living Dark Layer */
+        .dark-layer { position: fixed; inset: -80px; pointer-events: none; z-index: 1; background: radial-gradient(ellipse at 25% 75%, rgba(4,20,18,.95) 0%, rgba(8,14,22,.7) 35%, transparent 65%), radial-gradient(ellipse at 75% 25%, rgba(6,10,30,.9) 0%, rgba(10,14,24,.6) 40%, transparent 70%), radial-gradient(circle at 50% 50%, rgba(52,211,153,.04) 0%, transparent 50%); animation: floatingDark 30s ease-in-out infinite; will-change: transform, opacity; }
 
         /* Layout */
         .app { display: flex; width: 100%; height: 100%; position: relative; }
@@ -59,18 +235,21 @@
         .sidebar-logo { margin-bottom: 32px; width: 40px; height: 40px; border-radius: 12px; background: rgba(52,211,153,.2); border: 1px solid rgba(52,211,153,.3); display: flex; align-items: center; justify-content: center; }
         .sidebar-logo svg { width: 20px; height: 20px; color: #34d399; }
         .sidebar nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
-        .sidebar nav button { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border-radius: 12px; border: none; background: transparent; cursor: pointer; transition: all .2s; color: rgba(255,255,255,.4); }
+        .sidebar nav button { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border-radius: 12px; border: none; background: transparent; cursor: pointer; transition: color var(--duration-fast, 150ms) var(--ease-default, ease), background var(--duration-fast, 150ms) var(--ease-default, ease), box-shadow var(--duration-normal, 250ms) var(--ease-out, ease); color: rgba(255,255,255,.4); }
         .sidebar nav button:hover { color: rgba(255,255,255,.7); background: rgba(255,255,255,.06); }
+        .sidebar nav button:active { transform: scale(0.93); }
         .sidebar nav button.active { background: rgba(255,255,255,.1); color: #34d399; box-shadow: 0 0 20px rgba(52,211,153,.15); }
         .sidebar nav button svg { width: 20px; height: 20px; }
         .sidebar-avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #34d399, #22d3ee); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #111827; }
 
         /* Glass Card */
-        .glass-card { backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); border-radius: 16px; transition: background .2s; }
+        .glass-card { backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); border-radius: 16px; transition: background var(--duration-fast, 150ms) var(--ease-default, ease), box-shadow var(--duration-normal, 250ms) var(--ease-out, ease), transform var(--duration-fast, 150ms) var(--ease-spring, ease); }
         .glass-card:hover { background: rgba(255,255,255,.06); }
+        .glass-card.hover-lift:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,.25); }
 
         /* Main */
-        .main { flex: 1; overflow-y: auto; padding: 32px; position: relative; z-index: 10; }
+        .main { flex: 1; overflow-y: auto; padding: 32px; position: relative; z-index: 10; display: flex; flex-direction: column; }
+        .page { animation: fadeIn .3s ease; }
         .main::-webkit-scrollbar { width: 6px; }
         .main::-webkit-scrollbar-track { background: transparent; }
         .main::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 3px; }
@@ -97,11 +276,11 @@
         .text-amber { color: #fbbf24; }
 
         /* Bottom Grid */
-        .bottom-grid { display: grid; grid-template-columns: 1fr 360px; gap: 16px; }
+        .bottom-grid { display: grid; grid-template-columns: 1fr 360px; gap: 16px; align-items: start; }
         .right-col { display: flex; flex-direction: column; gap: 16px; }
 
         /* Chart Card */
-        .chart-card { padding: 24px; flex: 1; }
+        .chart-card { padding: 24px; display: flex; flex-direction: column; }
         .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
         .chart-title { color: rgba(255,255,255,.9); font-size: 15px; }
         .chart-sub { color: rgba(255,255,255,.4); font-size: 13px; margin-top: 4px; }
@@ -127,6 +306,28 @@
         .tracked-stat-label span { font-size: 11px; color: rgba(255,255,255,.4); }
         .tracked-stat-value { font-size: 18px; color: rgba(255,255,255,.9); }
 
+        /* Active App Card */
+        .active-app-card { padding: 20px; position: relative; overflow: hidden; }
+        .active-app-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #34d399, #22d3ee); opacity: .6; border-radius: 16px 16px 0 0; }
+        .aac-header { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+        .aac-header svg { width: 16px; height: 16px; color: #34d399; }
+        .aac-header h3 { color: rgba(255,255,255,.8); font-size: 14px; font-weight: 500; }
+        .aac-pulse { width: 8px; height: 8px; border-radius: 50%; background: #34d399; margin-left: auto; animation: pulse 2s infinite; }
+        .aac-body { display: flex; align-items: center; gap: 14px; }
+        .aac-icon { width: 48px; height: 48px; border-radius: 12px; background: linear-gradient(135deg, rgba(59,130,246,.3), rgba(168,85,247,.3)); border: 1px solid rgba(255,255,255,.1); display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0; }
+        .aac-icon img { width: 32px; height: 32px; object-fit: contain; }
+        .aac-icon .aac-emoji { font-size: 22px; line-height: 1; }
+        .aac-info { flex: 1; min-width: 0; }
+        .aac-name { color: rgba(255,255,255,.95); font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .aac-title { color: rgba(255,255,255,.4); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+        .aac-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.06); }
+        .aac-duration { display: flex; align-items: center; gap: 6px; }
+        .aac-duration svg { width: 14px; height: 14px; color: rgba(255,255,255,.3); }
+        .aac-duration-val { font-size: 20px; font-weight: 600; color: #22d3ee; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+        .aac-badge { font-size: 11px; padding: 3px 10px; border-radius: 99px; background: rgba(52,211,153,.12); color: #34d399; border: 1px solid rgba(52,211,153,.15); white-space: nowrap; }
+        .aac-badge.negative { background: rgba(251,191,36,.12); color: #fbbf24; border-color: rgba(251,191,36,.15); }
+        .aac-badge.neutral { background: rgba(255,255,255,.06); color: rgba(255,255,255,.5); border-color: rgba(255,255,255,.08); }
+
         /* AI Insights Card */
         .ai-card { padding: 20px; }
         .ai-header { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
@@ -134,17 +335,18 @@
         .ai-header h3 { color: rgba(255,255,255,.8); font-size: 14px; font-weight: 500; }
         .ai-live { margin-left: auto; font-size: 11px; color: rgba(52,211,153,.7); background: rgba(52,211,153,.1); padding: 2px 8px; border-radius: 99px; }
         .ai-insights { display: flex; flex-direction: column; gap: 12px; }
-        .insight-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 12px; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.05); transition: background .2s; }
+        .insight-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 12px; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.05); transition: background var(--duration-fast, 150ms) var(--ease-default, ease); }
         .insight-item:hover { background: rgba(255,255,255,.06); }
         .insight-icon { width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px; }
         .insight-icon svg { width: 14px; height: 14px; }
         .insight-text { font-size: 13px; color: rgba(255,255,255,.6); line-height: 1.6; }
 
         /* Activity List in Chart Area */
-        .activity-list { max-height: 240px; overflow-y: auto; margin-top: 12px; }
+        #activityTimeline { display: flex; flex-direction: column; }
+        .activity-list { overflow-y: auto; margin-top: 12px; max-height: 400px; }
         .activity-list::-webkit-scrollbar { width: 4px; }
         .activity-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 2px; }
-        .activity-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; transition: background .15s; animation: fadeIn .3s ease; }
+        .activity-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; transition: background var(--duration-fast, 150ms) var(--ease-default, ease); animation: fadeIn var(--duration-normal, 250ms) var(--ease-out, ease); }
         .activity-row:hover { background: rgba(255,255,255,.04); }
         .activity-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
         .activity-info { flex: 1; min-width: 0; }
@@ -154,6 +356,19 @@
         .activity-cat { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: rgba(52,211,153,.1); color: #34d399; }
         .activity-cat.negative { background: rgba(251,191,36,.1); color: #fbbf24; }
         .activity-dur { font-size: 11px; color: rgba(255,255,255,.3); margin-top: 4px; }
+
+        /* AI Source Badge */
+        .source-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 9px; padding: 1px 6px; border-radius: 4px; margin-left: 4px; vertical-align: middle; }
+        .source-badge.ai { background: rgba(34,211,238,.12); color: #22d3ee; border: 1px solid rgba(34,211,238,.2); }
+        .source-badge.user { background: rgba(167,139,250,.12); color: #a78bfa; border: 1px solid rgba(167,139,250,.2); }
+        .source-badge.seed { background: rgba(255,255,255,.06); color: rgba(255,255,255,.35); border: 1px solid rgba(255,255,255,.08); }
+        .source-badge svg { width: 10px; height: 10px; }
+
+        /* Override Dropdown */
+        .override-select { appearance: none; -webkit-appearance: none; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); border-radius: 6px; color: rgba(255,255,255,.8); font-size: 11px; padding: 3px 22px 3px 8px; cursor: pointer; outline: none; transition: border-color .2s, background .2s; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,0.4)'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 6px center; }
+        .override-select:hover { background-color: rgba(255,255,255,.1); border-color: rgba(52,211,153,.4); }
+        .override-select:focus { border-color: #34d399; box-shadow: 0 0 0 2px rgba(52,211,153,.15); }
+        .override-select option { background: #1a1e2e; color: #fff; }
 
         /* Loading */
         .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(52,211,153,.3); border-top-color: #34d399; border-radius: 50%; animation: spin .6s linear infinite; }
@@ -165,7 +380,16 @@
     </style>
 </head>
 <body>
+    <!-- Atmospheric Image BG (3-layer parallax) -->
+    <div class="atmo-bg" id="atmoBg">
+        <div class="atmo-bg__layer atmo-bg__layer--1"></div>
+        <div class="atmo-bg__layer atmo-bg__layer--2"></div>
+        <div class="atmo-bg__layer atmo-bg__layer--3"></div>
+    </div>
     <div class="ambient"><div class="g1"></div><div class="g2"></div></div>
+    <div class="mood-glow-orb" id="moodGlowOrb"></div>
+    <div class="dark-layer"></div>
+    <div class="mood-vignette" id="moodVignette"></div>
     <div class="app">
         <!-- Sidebar -->
         <aside class="sidebar">
@@ -173,27 +397,27 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
             </div>
             <nav>
-                <button class="active" title="Dashboard">
+                <button class="active" data-vc-tip="Dashboard" data-vc-tip-pos="bottom" data-page="dashboard" onclick="navigateTo('dashboard')">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
                 </button>
-                <button title="Activity">
+                <button data-vc-tip="Activity" data-vc-tip-pos="bottom" data-page="activity" onclick="navigateTo('activity')">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
                 </button>
-                <button title="AI Insights">
+                <button data-vc-tip="AI Insights" data-vc-tip-pos="bottom" data-page="ai-insights" onclick="navigateTo('ai-insights')">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93"/><path d="M8.24 9.93A4 4 0 0 1 8 6a4 4 0 0 1 4-4"/><path d="M12 18v4"/><path d="M8 22h8"/><circle cx="12" cy="14" r="4"/></svg>
                 </button>
-                <button title="History">
+                <button data-vc-tip="History" data-vc-tip-pos="bottom" data-page="history" onclick="navigateTo('history')">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 </button>
-                <button title="Settings">
+                <button data-vc-tip="Settings" data-vc-tip-pos="bottom" data-page="settings" onclick="navigateTo('settings')">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
                 </button>
             </nav>
             <div class="sidebar-avatar">V</div>
         </aside>
 
-        <!-- Main Content -->
-        <main class="main">
+        <!-- Main Content: Dashboard -->
+        <main class="main page" id="page-dashboard" data-page="dashboard">
             <!-- Header -->
             <div class="header">
                 <div>
@@ -205,6 +429,11 @@
                         <div class="badge" id="aiBadge">
                             <span class="badge-dot" style="background:#22d3ee"></span>
                             <span class="badge-label">AI Analyzing</span>
+                        </div>
+                        <div class="mood-badge" id="moodBadge">
+                            <span class="mood-dot"></span>
+                            <span class="mood-label">Mood</span>
+                            <span class="mood-value" id="moodScoreValue">0.0</span>
                         </div>
                     </div>
                     <h1>VIGILANT Active</h1>
@@ -236,6 +465,18 @@
                 </div>
             </div>
 
+            <!-- Live Timer Widget -->
+            <div class="glass-card live-timer-card">
+                <div class="live-timer-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                </div>
+                <div class="live-timer-body">
+                    <div class="live-timer-elapsed" id="live-timer-elapsed">0:00</div>
+                    <div class="live-timer-app" id="live-timer-app">—</div>
+                </div>
+                <span class="live-timer-idle-badge" id="live-timer-idle">IDLE</span>
+            </div>
+
             <!-- Bottom Grid -->
             <div class="bottom-grid">
                 <!-- Chart / Activity Timeline -->
@@ -251,29 +492,35 @@
                         </div>
                     </div>
                     <div id="activityTimeline">
-                        <div style="text-align:center;padding:60px 0;color:rgba(255,255,255,.3)">
-                            <div class="spinner" style="margin:0 auto 12px"></div>
-                            <p>Loading activities...</p>
-                        </div>
+                        <!-- Skeleton loading state (replaced by JS on data arrival) -->
+                        <div id="activitySkeleton" style="padding:4px 0"></div>
                     </div>
                 </div>
 
                 <!-- Right Column -->
                 <div class="right-col">
-                    <!-- Currently Tracked App -->
-                    <div class="glass-card tracked-card">
-                        <div class="tracked-header">
+                    <!-- Active App Card -->
+                    <div class="glass-card active-app-card" id="activeAppCard">
+                        <div class="aac-header">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                            <h3>Currently Tracked App</h3>
+                            <h3>Currently Active</h3>
+                            <span class="aac-pulse"></span>
                         </div>
-                        <div class="tracked-app">
-                            <div class="app-icon" id="currentAppIcon">💻</div>
-                            <div>
-                                <p class="app-name" id="currentAppName">Waiting...</p>
-                                <p class="app-time" id="currentAppTime">--</p>
+                        <div class="aac-body">
+                            <div class="aac-icon" id="aacIcon"><span class="aac-emoji">💻</span></div>
+                            <div class="aac-info">
+                                <p class="aac-name" id="aacName">Waiting...</p>
+                                <p class="aac-title" id="aacTitle">(No title)</p>
                             </div>
                         </div>
-                        <div class="tracked-stats">
+                        <div class="aac-footer">
+                            <div class="aac-duration">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                <span class="aac-duration-val" id="aacDuration">00:00</span>
+                            </div>
+                            <span class="aac-badge neutral" id="aacCategory">Uncategorized</span>
+                        </div>
+                        <div class="tracked-stats" style="margin-top:14px">
                             <div class="tracked-stat">
                                 <div class="tracked-stat-label">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.3)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -320,33 +567,369 @@
                         </div>
                     </div>
 
+                    <!-- Session History -->
+                    <div class="glass-card session-history-card hover-lift">
+                        <div class="session-history-title">Session History</div>
+                        <div id="session-history"></div>
+                    </div>
+
+                    <!-- Gemini Daily Narrative -->
+                    <div class="glass-card narrative-card hover-lift">
+                        <div class="narrative-header">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93"/><path d="M8.24 9.93A4 4 0 0 1 8 6a4 4 0 0 1 4-4"/><path d="M12 18v4"/><path d="M8 22h8"/><circle cx="12" cy="14" r="4"/></svg>
+                            <h3>Daily Narrative</h3>
+                            <button class="narrative-btn" id="narrativeBtn" onclick="_generateNarrative()">Generate</button>
+                        </div>
+                        <p class="narrative-text" id="narrativeText">Click "Generate" to get an AI-powered summary of your day.</p>
+                        <ul class="narrative-insights" id="narrativeInsights"></ul>
+                    </div>
+
                     <!-- Top Apps Today -->
-                    <div class="glass-card ai-card">
+                    <div class="glass-card ai-card hover-lift">
                         <div class="ai-header">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
                             <h3>Top Apps Today</h3>
                         </div>
-                        <div id="topAppsContainer" style="padding:4px 0">
-                            <p style="color:rgba(255,255,255,.3);font-size:13px;padding:12px 0">Loading...</p>
-                        </div>
+                        <div id="topAppsContainer" style="padding:4px 0"></div>
                     </div>
 
                     <!-- Time Breakdown -->
-                    <div class="glass-card ai-card">
+                    <div class="glass-card ai-card hover-lift">
                         <div class="ai-header">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                             <h3>Time Breakdown</h3>
                         </div>
-                        <div id="timeBreakdownContainer" style="padding:4px 0">
-                            <p style="color:rgba(255,255,255,.3);font-size:13px;padding:12px 0">Loading...</p>
-                        </div>
+                        <div id="timeBreakdownContainer" style="padding:4px 0"></div>
                     </div>
                 </div>
             </div>
         </main>
+
+        <!-- Page: Activity -->
+        <main class="main page" id="page-activity" data-page="activity" style="display:none">
+            <div class="header">
+                <div>
+                    <div class="badges">
+                        <div class="badge">
+                            <span class="badge-dot" style="background:#34d399"></span>
+                            <span class="badge-label">Tracking Active</span>
+                        </div>
+                    </div>
+                    <h1>Activity</h1>
+                    <p class="header-sub">Detailed activity timeline &amp; application usage</p>
+                </div>
+            </div>
+            <div class="glass-card" style="padding:48px;text-align:center;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(52,211,153,.4)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                <h2 style="color:rgba(255,255,255,.6);font-size:18px;font-weight:500">Activity Timeline</h2>
+                <p style="color:rgba(255,255,255,.3);font-size:14px;max-width:400px">Detailed view of all tracked activities, application usage durations, and timeline visualization will appear here.</p>
+            </div>
+        </main>
+
+        <!-- Page: AI Insights -->
+        <main class="main page" id="page-ai-insights" data-page="ai-insights" style="display:none">
+            <div class="header">
+                <div>
+                    <div class="badges">
+                        <div class="badge">
+                            <span class="badge-dot" style="background:#22d3ee"></span>
+                            <span class="badge-label">AI Engine</span>
+                        </div>
+                    </div>
+                    <h1>AI Insights</h1>
+                    <p class="header-sub">AI-powered productivity analysis &amp; recommendations</p>
+                </div>
+            </div>
+            <div class="glass-card" style="padding:48px;text-align:center;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(34,211,238,.4)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93"/><path d="M8.24 9.93A4 4 0 0 1 8 6a4 4 0 0 1 4-4"/><path d="M12 18v4"/><path d="M8 22h8"/><circle cx="12" cy="14" r="4"/></svg>
+                <h2 style="color:rgba(255,255,255,.6);font-size:18px;font-weight:500">AI Insights</h2>
+                <p style="color:rgba(255,255,255,.3);font-size:14px;max-width:400px">AI-driven categorization results, productivity patterns, focus recommendations, and behavioral insights will appear here.</p>
+            </div>
+        </main>
+
+        <!-- Page: History -->
+        <main class="main page" id="page-history" data-page="history" style="display:none">
+            <div class="header">
+                <div>
+                    <div class="badges">
+                        <div class="badge">
+                            <span class="badge-dot" style="background:#a78bfa"></span>
+                            <span class="badge-label">Records</span>
+                        </div>
+                    </div>
+                    <h1>History</h1>
+                    <p class="header-sub">Past sessions, daily reports &amp; trends</p>
+                </div>
+            </div>
+            <div class="glass-card" style="padding:48px;text-align:center;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(167,139,250,.4)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <h2 style="color:rgba(255,255,255,.6);font-size:18px;font-weight:500">Usage History</h2>
+                <p style="color:rgba(255,255,255,.3);font-size:14px;max-width:400px">Historical data, daily/weekly/monthly reports, productivity trends, and session archives will appear here.</p>
+            </div>
+        </main>
+
+        <!-- Page: Settings -->
+        <main class="main page" id="page-settings" data-page="settings" style="display:none">
+            <div class="header">
+                <div>
+                    <div class="badges">
+                        <div class="badge">
+                            <span class="badge-dot" style="background:#fbbf24"></span>
+                            <span class="badge-label">Configuration</span>
+                        </div>
+                    </div>
+                    <h1>Settings</h1>
+                    <p class="header-sub">Application preferences &amp; configuration</p>
+                </div>
+            </div>
+            <div class="glass-card" style="padding:48px;text-align:center;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(251,191,36,.4)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                <h2 style="color:rgba(255,255,255,.6);font-size:18px;font-weight:500">Settings</h2>
+                <p style="color:rgba(255,255,255,.3);font-size:14px;max-width:400px">Tracking preferences, AI configuration, notification settings, app categorization rules, and general options will appear here.</p>
+            </div>
+        </main>
     </div>
 
+    <script src="micro-interactions.js"></script>
+    <script src="mood-engine.js"></script>
+    <script src="timer-service.js"></script>
+    <script src="gemini-client.js"></script>
     <script>
+        // =============================================
+        // Mood Engine Instance + app-switch counter
+        // =============================================
+        var _moodEngine = new MoodEngine();
+        _moodEngine.mount(document.documentElement);
+
+        // Track app switches for mood calculation
+        var _moodAppSwitchCount = 0;
+        var _moodLastResetTime = Date.now();
+
+        // Update mood badge when score changes
+        _moodEngine.bus.on('scoreChanged', function (score) {
+            var el = document.getElementById('moodScoreValue');
+            if (el) el.textContent = (score > 0 ? '+' : '') + score.toFixed(1);
+        });
+
+        // =============================================
+        // Timer Service Instance + DOM mount
+        // =============================================
+        var _timerService = new TimerService();
+        mountTimerUI(_timerService);
+
+        // =============================================
+        // Gemini Client Instance (API key via window._geminiConfig)
+        // =============================================
+        var _geminiClient = null;
+        try {
+            _geminiClient = new GeminiClient(null, 'info');
+        } catch (e) { console.warn('GeminiClient init skipped:', e); }
+
+        // =============================================
+        // Active App Store (getState / setState / subscribe)
+        // =============================================
+        var ActiveAppStore = (function() {
+            var _state = {
+                pid: 0,
+                exePath: '',
+                processName: 'Unknown',
+                windowTitle: '(No title)',
+                category: '',
+                categoryScore: 0,
+                startedAt: 0,
+                durationSec: 0
+            };
+            var _listeners = [];
+            return {
+                getState: function() { return _state; },
+                setState: function(partial) {
+                    var prev = {};
+                    for (var k in _state) prev[k] = _state[k];
+                    for (var k in partial) _state[k] = partial[k];
+                    for (var i = 0; i < _listeners.length; i++) _listeners[i](_state, prev);
+                },
+                subscribe: function(fn) {
+                    _listeners.push(fn);
+                    return function() {
+                        _listeners = _listeners.filter(function(l) { return l !== fn; });
+                    };
+                }
+            };
+        })();
+
+        // =============================================
+        // Icon Cache (Map + async loader stub)
+        // =============================================
+        var IconCache = (function() {
+            var _cache = new Map();
+            var _pending = new Set();
+            return {
+                get: function(exePath) {
+                    if (!exePath) return null;
+                    return _cache.has(exePath) ? _cache.get(exePath) : null;
+                },
+                set: function(exePath, dataUrl) {
+                    _cache.set(exePath, dataUrl);
+                    _pending.delete(exePath);
+                },
+                has: function(exePath) { return _cache.has(exePath); },
+                request: function(exePath) {
+                    if (!exePath || _pending.has(exePath) || _cache.has(exePath)) return;
+                    _pending.add(exePath);
+                    // Async stub: request icon from native host.
+                    // Host should respond with {type:'appIconResponse', exePath, dataUrl}
+                    try {
+                        window.chrome.webview.postMessage({ type: 'getAppIcon', exePath: exePath });
+                    } catch(e) { /* webview not ready */ }
+                }
+            };
+        })();
+
+        // =============================================
+        // Active App Card Renderer (targeted text-node diffs)
+        // =============================================
+        var ActiveAppRenderer = (function() {
+            var _refs = null;
+
+            function ensureRefs() {
+                if (_refs) return _refs;
+                _refs = {
+                    icon:     document.getElementById('aacIcon'),
+                    name:     document.getElementById('aacName'),
+                    title:    document.getElementById('aacTitle'),
+                    duration: document.getElementById('aacDuration'),
+                    category: document.getElementById('aacCategory'),
+                    session:  document.getElementById('sessionTime')
+                };
+                return _refs;
+            }
+
+            function formatMMSS(sec) {
+                sec = Math.max(0, Math.floor(sec));
+                var m = Math.floor(sec / 60);
+                var s = sec % 60;
+                return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+            }
+
+            function badgeClass(category, score) {
+                if (score < 0) return 'aac-badge negative';
+                var c = (category || '').toLowerCase();
+                if (c.includes('yazilim') || c.includes('egitim') || c.includes('gelistirme')) return 'aac-badge';
+                if (c.includes('sosyal') || c.includes('eglence') || c.includes('oyun')) return 'aac-badge negative';
+                if (!category) return 'aac-badge neutral';
+                return 'aac-badge';
+            }
+
+            // Only touches the DOM nodes whose backing data actually changed
+            function render(state, prev) {
+                var r = ensureRefs();
+                if (!r.name) return;
+
+                if (state.processName !== prev.processName) {
+                    r.name.textContent = state.processName || 'Unknown';
+                }
+                if (state.windowTitle !== prev.windowTitle) {
+                    r.title.textContent = state.windowTitle || '(No title)';
+                }
+                if (state.exePath !== prev.exePath) {
+                    var cached = IconCache.get(state.exePath);
+                    if (cached) {
+                        r.icon.innerHTML = '<img src="' + cached + '" alt="">';
+                    } else {
+                        var emoji = getAppIcon((state.processName || 'unknown') + '.exe');
+                        r.icon.innerHTML = '<span class="aac-emoji">' + emoji + '</span>';
+                        IconCache.request(state.exePath);
+                    }
+                }
+                if (state.category !== prev.category || state.categoryScore !== prev.categoryScore) {
+                    r.category.textContent = state.category || 'Uncategorized';
+                    r.category.className = badgeClass(state.category, state.categoryScore);
+                }
+                if (state.durationSec !== prev.durationSec || state.startedAt !== prev.startedAt) {
+                    r.duration.textContent = formatMMSS(state.durationSec);
+                    if (r.session) r.session.textContent = formatDuration(state.durationSec);
+                }
+            }
+
+            // Direct DOM write each second — no store round-trip, no layout thrash
+            function tickDuration() {
+                var state = ActiveAppStore.getState();
+                if (!state.startedAt) return;
+                var elapsed = Math.floor((Date.now() - state.startedAt) / 1000);
+                var r = ensureRefs();
+                if (r.duration) r.duration.textContent = formatMMSS(elapsed);
+                if (r.session) r.session.textContent = formatDuration(elapsed);
+            }
+
+            return { render: render, tickDuration: tickDuration, formatMMSS: formatMMSS };
+        })();
+
+        // =============================================
+        // Event handlers: WebView message → store
+        // =============================================
+        function _handleActiveAppChanged(payload) {
+            if (!payload) return;
+
+            // Mood Engine: count app switches (10-min sliding window approximation)
+            var now = Date.now();
+            if (now - _moodLastResetTime > 600000) { // 10 min
+                _moodAppSwitchCount = 0;
+                _moodLastResetTime = now;
+            }
+            _moodAppSwitchCount++;
+
+            var exePath = payload.exePath || '';
+            var parts = exePath.replace(/\\/g, '/').split('/');
+            var exeName = parts[parts.length - 1] || '';
+            var processName = exeName.replace(/\.exe$/i, '') || 'Unknown';
+
+            ActiveAppStore.setState({
+                pid: payload.pid || 0,
+                exePath: exePath,
+                processName: processName,
+                windowTitle: payload.windowTitle || '(No title)',
+                startedAt: Date.now(),
+                durationSec: 0
+            });
+
+            // Timer Service: notify active app changed
+            if (typeof _timerService !== 'undefined') {
+                _timerService.onActiveAppChanged(processName, payload.timestamp || Date.now());
+            }
+        }
+
+        function _handleAppIconResponse(data) {
+            if (!data || !data.exePath || !data.dataUrl) return;
+            IconCache.set(data.exePath, data.dataUrl);
+            var s = ActiveAppStore.getState();
+            if (s.exePath === data.exePath) {
+                var iconEl = document.getElementById('aacIcon');
+                if (iconEl) iconEl.innerHTML = '<img src="' + data.dataUrl + '" alt="">';
+            }
+        }
+
+        // --- Page Navigation ---
+        function navigateTo(pageName) {
+            // Hide all pages
+            var pages = document.querySelectorAll('.page');
+            for (var i = 0; i < pages.length; i++) {
+                pages[i].style.display = 'none';
+            }
+            // Show target page
+            var target = document.getElementById('page-' + pageName);
+            if (target) {
+                target.style.display = '';
+            }
+            // Update active button
+            var buttons = document.querySelectorAll('.sidebar nav button');
+            for (var i = 0; i < buttons.length; i++) {
+                buttons[i].classList.remove('active');
+                if (buttons[i].getAttribute('data-page') === pageName) {
+                    buttons[i].classList.add('active');
+                }
+            }
+        }
+
         var appIcons = {
             'devenv.exe': '🔷', 'Code.exe': '💜', 'chrome.exe': '🌐', 'msedge.exe': '🌊',
             'firefox.exe': '🦊', 'discord.exe': '💬', 'slack.exe': '💬', 'spotify.exe': '🎵',
@@ -379,22 +962,137 @@
             return { dot: '#22d3ee', cls: '' };
         }
 
+        // --- Duration ticker state ---
+        var _durationState = { baseDurations: [], fetchedAt: 0 };
+
+        // --- Debounce + cooldown + concurrency guard for refresh ---
+        var _refreshTimer = null;
+        var _lastRefreshTime = 0;
+        var _refreshInProgress = false;
+        var _refreshQueued = false;
+        var REFRESH_COOLDOWN_MS = 2500;
+
+        function _debouncedRefresh() {
+            if (_refreshTimer) clearTimeout(_refreshTimer);
+            if (_refreshInProgress) {
+                _refreshQueued = true;
+                return;
+            }
+            var now = Date.now();
+            var elapsed = now - _lastRefreshTime;
+            if (elapsed < REFRESH_COOLDOWN_MS) {
+                _refreshTimer = setTimeout(refreshData, REFRESH_COOLDOWN_MS - elapsed);
+                return;
+            }
+            _refreshTimer = setTimeout(refreshData, 500);
+        }
+
+        // --- Activity logs cache for narrative fallback ---
+        var _lastActivityLogs = [];
+
+        var CATEGORY_LIST = ['Yazilim', 'Egitim', 'Gelistirme', 'Is', 'Tasarim', 'Arastirma', 'Eglence', 'Sosyal Medya', 'Oyun', 'Iletisim', 'Diger', 'Uncategorized'];
+        var CATEGORY_SCORES = {'Yazilim':10,'Egitim':8,'Gelistirme':10,'Is':7,'Tasarim':6,'Arastirma':5,'Eglence':-5,'Sosyal Medya':-3,'Oyun':-5,'Iletisim':2,'Diger':0,'Uncategorized':0};
+
+        function getSourceBadge(source) {
+            if (source === 'ai') return '<span class="source-badge ai"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 014 4c0 1.95-1.4 3.58-3.25 3.93"/><circle cx="12" cy="14" r="4"/></svg>AI</span>';
+            if (source === 'user') return '<span class="source-badge user"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>User</span>';
+            return '<span class="source-badge seed">Seed</span>';
+        }
+
+        function buildOverrideSelect(log, index) {
+            var current = log.category || 'Uncategorized';
+            var html = '<select class="override-select" data-idx="' + index + '" data-process="' + (log.process || '').replace(/"/g, '&quot;') + '" data-title="' + (log.title || '').replace(/"/g, '&quot;') + '" onchange="handleOverrideChange(this)">';
+            for (var i = 0; i < CATEGORY_LIST.length; i++) {
+                var cat = CATEGORY_LIST[i];
+                html += '<option value="' + cat + '"' + (cat === current ? ' selected' : '') + '>' + cat + '</option>';
+            }
+            html += '</select>';
+            return html;
+        }
+
+        async function handleOverrideChange(selectEl) {
+            var process = selectEl.getAttribute('data-process');
+            var title = selectEl.getAttribute('data-title');
+            var newCategory = selectEl.value;
+            var newScore = CATEGORY_SCORES[newCategory] || 0;
+
+            // Basit title pattern cikarma: eger spesifik title varsa '*', yoksa '*'
+            var titlePattern = '*';
+
+            selectEl.style.borderColor = 'rgba(52,211,153,.6)';
+            selectEl.style.boxShadow = '0 0 8px rgba(52,211,153,.2)';
+
+            try {
+                var resp = await window.dashboardAPI.saveCategoryOverride(process, titlePattern, newCategory, newScore);
+                if (resp && resp.status === 'success') {
+                    // Badge'i guncelle
+                    var row = selectEl.closest('.activity-row');
+                    if (row) {
+                        var badge = row.querySelector('.source-badge');
+                        if (badge) badge.outerHTML = getSourceBadge('user');
+                        var catEl = row.querySelector('.activity-cat');
+                        if (catEl) {
+                            var col = getCategoryColor(newCategory, newScore);
+                            catEl.textContent = newCategory;
+                            catEl.className = 'activity-cat ' + col.cls;
+                        }
+                    }
+                    setTimeout(function() {
+                        selectEl.style.borderColor = '';
+                        selectEl.style.boxShadow = '';
+                    }, 1500);
+                }
+            } catch(e) {
+                selectEl.style.borderColor = 'rgba(239,68,68,.6)';
+                setTimeout(function() {
+                    selectEl.style.borderColor = '';
+                    selectEl.style.boxShadow = '';
+                }, 2000);
+            }
+        }
+
         function updateActivityList(response) {
             var el = document.getElementById('activityTimeline');
             if (!response || !response.logs || response.logs.length === 0) {
                 el.innerHTML = '<div style="text-align:center;padding:60px 0;color:rgba(255,255,255,.3)"><p>No activities recorded yet</p></div>';
                 document.getElementById('activityCount').textContent = '0';
+                _durationState.baseDurations = [];
+                _lastActivityLogs = [];
                 return;
             }
             var logs = response.logs;
+            _lastActivityLogs = logs;
             document.getElementById('activityCount').textContent = logs.length;
 
-            // Current app
+            // Save duration state for ticker
+            _durationState.baseDurations = [];
+            _durationState.fetchedAt = Date.now();
+            for (var i = 0; i < logs.length; i++) {
+                _durationState.baseDurations.push(logs[i].duration || 0);
+            }
+
+            // Current app → push into ActiveAppStore (renderer handles DOM updates)
             var top = logs[0];
-            document.getElementById('currentAppIcon').textContent = getAppIcon(top.process);
-            document.getElementById('currentAppName').textContent = top.process.replace('.exe', '');
-            document.getElementById('currentAppTime').textContent = 'Active for ' + formatDuration(top.duration);
-            document.getElementById('sessionTime').textContent = formatDuration(top.duration);
+            var _topName = (top.process || '').replace('.exe', '') || 'Unknown';
+
+            // Bridge: notify timer service when the active app changes
+            // This ensures session history works even if EventBridge events
+            // haven't reached JS yet (e.g., during startup race).
+            if (typeof _timerService !== 'undefined' && _timerService) {
+                var timerApp = _timerService.getState().activeApp;
+                if (timerApp !== _topName) {
+                    _timerService.onActiveAppChanged(_topName, Date.now());
+                }
+            }
+
+            ActiveAppStore.setState({
+                processName: _topName,
+                windowTitle: top.title || '(No title)',
+                category: top.category || '',
+                categoryScore: top.score || 0,
+                durationSec: top.duration || 0,
+                startedAt: Date.now() - ((top.duration || 0) * 1000)
+            });
 
             // Distractions count
             var distractions = 0;
@@ -407,14 +1105,19 @@
             for (var i = 0; i < max; i++) {
                 var log = logs[i];
                 var col = getCategoryColor(log.category, log.score);
+                var source = log.source || 'seed';
                 html += '<div class="activity-row">';
                 html += '<span class="activity-dot" style="background:' + col.dot + '"></span>';
                 html += '<div class="activity-info">';
-                html += '<div class="activity-proc">' + (log.process || 'Unknown') + '</div>';
+                html += '<div class="activity-proc">' + (log.process || 'Uncategorized') + '</div>';
                 html += '<div class="activity-ttl">' + (log.title || '(No title)') + '</div>';
                 html += '</div>';
                 html += '<div class="activity-meta">';
-                html += '<span class="activity-cat ' + col.cls + '">' + (log.category || 'Unknown') + '</span>';
+                html += '<div style="display:flex;align-items:center;gap:4px;justify-content:flex-end;margin-bottom:3px">';
+                html += '<span class="activity-cat ' + col.cls + '">' + (log.category || 'Uncategorized') + '</span>';
+                html += getSourceBadge(source);
+                html += '</div>';
+                html += buildOverrideSelect(log, i);
                 html += '<div class="activity-dur">' + formatDuration(log.duration) + '</div>';
                 html += '</div></div>';
             }
@@ -430,17 +1133,30 @@
             document.getElementById('deepWork').textContent = formatDuration(m.totalTime || 0);
             document.getElementById('currentFocus').textContent = prod + '%';
 
-            // Insights
+            // ── Feed Mood Engine ──
+            // focusSeconds: productive deep-work time (totalTime from DB)
+            // appSwitchCount: tracked by _handleActiveAppChanged
+            // idleRatio: estimate from distraction ratio
+            var totalSec = m.totalTime || 0;
             var cats = m.categories || {};
-            var topCat = '', topVal = 0;
-            for (var k in cats) { if (cats[k] > topVal) { topVal = cats[k]; topCat = k; } }
-            if (topCat) {
-                document.getElementById('insightFlow').textContent = 'Most time spent in "' + topCat + '" (' + formatDuration(topVal) + '). Keep optimizing your workflow!';
-            }
             var distTotal = 0;
             var distCats = ['Eglence', 'Sosyal Medya', 'Oyun'];
             for (var i = 0; i < distCats.length; i++) {
                 if (cats[distCats[i]]) distTotal += cats[distCats[i]];
+            }
+            var idleRatio = totalSec > 0 ? distTotal / totalSec : 0;
+
+            _moodEngine.update({
+                focusSeconds: totalSec,
+                appSwitchCount: _moodAppSwitchCount,
+                idleRatio: _moodClamp(idleRatio, 0, 1)
+            });
+
+            // Insights
+            var topCat = '', topVal = 0;
+            for (var k in cats) { if (cats[k] > topVal) { topVal = cats[k]; topCat = k; } }
+            if (topCat) {
+                document.getElementById('insightFlow').textContent = 'Most time spent in "' + topCat + '" (' + formatDuration(topVal) + '). Keep optimizing your workflow!';
             }
             if (distTotal > 0) {
                 document.getElementById('insightDistractions').textContent = 'Distraction time today: ' + formatDuration(distTotal) + '. Try to minimize context switching.';
@@ -504,7 +1220,7 @@
                     html += '<span style="width:8px;height:8px;border-radius:50%;background:' + r.color + ';display:inline-block"></span>';
                     html += '<span>' + r.label + '</span>';
                     html += '</div>';
-                    html += '<span style="color:' + r.color + ';font-weight:600">' + formatDuration(r.sec) + ' (' + r.pct + '%)</span>';
+                    html += '<span style="color:' + r.color + ';font-weight:600">' + formatDuration(r.sec) + ' (' + parseFloat(r.pct).toFixed(2) + '%)</span>';
                     html += '</div>';
                 }
                 tbEl.innerHTML = html;
@@ -514,6 +1230,12 @@
         }
 
         async function refreshData() {
+            if (_refreshInProgress) {
+                _refreshQueued = true;
+                return;
+            }
+            _refreshInProgress = true;
+            _lastRefreshTime = Date.now();
             try {
                 var logsResp = await window.dashboardAPI.getActivityLogs(50);
                 updateActivityList(logsResp);
@@ -523,6 +1245,12 @@
                 updateDashboardSummary(summaryResp);
             } catch (e) {
                 console.error('Refresh error:', e);
+            } finally {
+                _refreshInProgress = false;
+                if (_refreshQueued) {
+                    _refreshQueued = false;
+                    _refreshTimer = setTimeout(refreshData, 1500);
+                }
             }
         }
 
@@ -547,8 +1275,164 @@
             setTimeout(function() { live.textContent = 'Live'; }, 3000);
         }
 
-        refreshData();
-        setInterval(refreshData, 3000);
+        // =============================================
+        // Gemini Daily Narrative Generator
+        // =============================================
+        function _generateNarrative() {
+            if (!_geminiClient) {
+                var nt = document.getElementById('narrativeText');
+                if (nt) nt.textContent = 'Gemini client not available. Set API key via window._geminiConfig = { apiKey: "..." }';
+                return;
+            }
+            var btn = document.getElementById('narrativeBtn');
+            var textEl = document.getElementById('narrativeText');
+            var listEl = document.getElementById('narrativeInsights');
+            if (btn) { btn.disabled = true; btn.textContent = 'Generating...'; }
+            if (textEl) textEl.textContent = 'Analyzing your activity timeline...';
+            if (listEl) listEl.innerHTML = '';
+
+            // Gather session data from timer
+            var sessions = [];
+            var timerState = _timerService ? _timerService.getState() : null;
+            if (timerState && timerState.sessions && timerState.sessions.length > 0) {
+                for (var i = 0; i < timerState.sessions.length; i++) {
+                    var s = timerState.sessions[i];
+                    sessions.push({
+                        start: new Date(s.nativeStartMs).toISOString(),
+                        end: new Date(s.nativeStartMs + s.durationMs).toISOString(),
+                        appName: s.appName,
+                        category: 'unknown',
+                        focusScore: 0.5
+                    });
+                }
+            }
+
+            // Fallback: construct sessions from cached DB activity logs
+            if (sessions.length === 0 && _lastActivityLogs && _lastActivityLogs.length > 0) {
+                var timeOffset = Date.now();
+                for (var i = 0; i < _lastActivityLogs.length; i++) {
+                    var log = _lastActivityLogs[i];
+                    var durSec = log.duration || 0;
+                    if (durSec < 60) continue;
+                    var endMs = timeOffset;
+                    var startMs = endMs - durSec * 1000;
+                    sessions.push({
+                        start: new Date(startMs).toISOString(),
+                        end: new Date(endMs).toISOString(),
+                        appName: (log.process || '').replace('.exe', '') || 'unknown',
+                        category: log.category || 'unknown',
+                        focusScore: (log.score || 0) > 0 ? 0.7 : 0.3
+                    });
+                    timeOffset = startMs;
+                }
+            }
+
+            GeminiNarrative.generateNarrative(_geminiClient, sessions).then(function (result) {
+                if (textEl) textEl.textContent = result.narrative || 'No narrative generated.';
+                if (listEl) {
+                    listEl.innerHTML = '';
+                    var insights = result.insights || [];
+                    for (var i = 0; i < insights.length; i++) {
+                        var li = document.createElement('li');
+                        li.textContent = insights[i];
+                        listEl.appendChild(li);
+                    }
+                }
+                if (btn) { btn.disabled = false; btn.textContent = 'Generate'; }
+            }).catch(function (err) {
+                console.error('Narrative generation failed:', err);
+                if (textEl) textEl.textContent = 'Failed to generate narrative: ' + (err.message || err);
+                if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
+            });
+        }
+
+        // Duration ticker: her saniye sadece DOM text node'larini gunceller (DB sorgusu yapmaz)
+        function tickDurations() {
+            // Active App Card — direct DOM write, no store round-trip
+            ActiveAppRenderer.tickDuration();
+
+            // Activity list first row duration
+            if (_durationState.baseDurations.length) {
+                var elapsed = Math.floor((Date.now() - _durationState.fetchedAt) / 1000);
+                var topDuration = _durationState.baseDurations[0] + elapsed;
+                var firstDurEl = document.querySelector('.activity-list .activity-row:first-child .activity-dur');
+                if (firstDurEl) {
+                    firstDurEl.textContent = formatDuration(topDuration);
+                }
+            }
+        }
+
+        // Wire store → renderer
+        ActiveAppStore.subscribe(ActiveAppRenderer.render);
+
+        // ── Skeleton initial state ──
+        try {
+            (function initSkeletons() {
+                var actSk = document.getElementById('activitySkeleton');
+                if (actSk && typeof Skeleton !== 'undefined') actSk.innerHTML = Skeleton.activityRow(6);
+                var topSk = document.getElementById('topAppsContainer');
+                if (topSk && typeof Skeleton !== 'undefined') topSk.innerHTML = Skeleton.activityRow(3);
+                var tbSk = document.getElementById('timeBreakdownContainer');
+                if (tbSk && typeof Skeleton !== 'undefined') tbSk.innerHTML = Skeleton.text(4, [100, 70, 85, 55]);
+            })();
+        } catch(e) { console.warn('Skeleton init skipped:', e); }
+
+        // Initial data load with retry for WebView bridge readiness
+        (function initDataLoad() {
+            var attempts = 0;
+            function tryLoad() {
+                attempts++;
+                refreshData().catch(function() {}).then(function() {
+                    var count = document.getElementById('activityCount');
+                    if (count && count.textContent === '--' && attempts < 10) {
+                        setTimeout(tryLoad, 1000);
+                    }
+                });
+            }
+            setTimeout(tryLoad, 500);
+        })();
+
+        setInterval(tickDurations, 1000);
+
+        // Refresh sadece ActiveAppChanged event'i geldiginde tetiklenir
+        // (Periyodik polling kaldirildi — event-driven guncelleme aktif)
+
+        // ── Auto-init accessible tooltips ──
+        try { if (typeof Tooltip !== 'undefined') Tooltip.initAll(); } catch(e) { console.warn('Tooltip init skipped:', e); }
+
+        // =============================================
+        // Atmospheric Parallax (throttled via rAF)
+        // =============================================
+        (function() {
+            var layers = document.querySelectorAll('.atmo-bg__layer');
+            if (!layers.length) return;
+
+            var depths = [0.008, 0.018, 0.03]; // parallax intensity per layer
+            var ticking = false;
+            var mx = 0, my = 0;
+
+            var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+            var motionOk = !mq.matches;
+            try { mq.addEventListener('change', function(e) { motionOk = !e.matches; }); } catch(_) {}
+
+            document.addEventListener('mousemove', function(e) {
+                if (!motionOk) return;
+                mx = (e.clientX / window.innerWidth  - 0.5) * 2;
+                my = (e.clientY / window.innerHeight - 0.5) * 2;
+
+                if (!ticking) {
+                    ticking = true;
+                    requestAnimationFrame(function() {
+                        for (var i = 0; i < layers.length; i++) {
+                            var d = depths[i] || 0.01;
+                            layers[i].style.setProperty('--px', (mx * d * 60) + 'px');
+                            layers[i].style.setProperty('--py', (my * d * 60) + 'px');
+                        }
+                        ticking = false;
+                    });
+                }
+            });
+        })();
     </script>
 </body>
 </html>
