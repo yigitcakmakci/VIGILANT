@@ -4,6 +4,8 @@
 #include "AI/GeminiService.hpp"
 #include "Utils/StartupManager.hpp"
 #include "Utils/json.hpp"
+#include "Utils/ResourceLoader.hpp"
+#include "resource.h"
 #include <sstream>
 
 extern DatabaseManager g_Vault;
@@ -134,6 +136,7 @@ bool WebViewManager::Initialize() {
                 }
 
                 OutputDebugStringW(L"[WebViewManager] Environment created successfully\n");
+                pThis->m_environment = env;
 
                 env->CreateCoreWebView2Controller(
                     pThis->m_hWnd,
@@ -209,36 +212,70 @@ bool WebViewManager::Initialize() {
                             pThis->m_controller->put_Bounds(bounds);
                             OutputDebugStringW(L"[WebViewManager] Bounds set\n");
 
-                            // Get EXE path
-                            wchar_t exePath[MAX_PATH];
-                            GetModuleFileNameW(NULL, exePath, MAX_PATH);
-                            std::wstring path(exePath);
-                            std::wstring directory = path.substr(0, path.find_last_of(L"\\/"));
+                            // ── Serve embedded web resources via virtual host ──
+                            pThis->m_webView->AddWebResourceRequestedFilter(
+                                L"https://vigilant.local/*",
+                                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
 
-                            OutputDebugStringW(L"[WebViewManager] EXE Directory: ");
-                            OutputDebugStringW(directory.c_str());
-                            OutputDebugStringW(L"\n");
+                            pThis->m_webView->add_WebResourceRequested(
+                                Microsoft::WRL::Callback<ICoreWebView2WebResourceRequestedEventHandler>(
+                                    [pThis](ICoreWebView2* /*sender*/,
+                                            ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
 
-                            // Convert Windows path to file:// URL format
-                            std::wstring fileUrlPath = L"file:///";
-                            for (wchar_t c : directory) {
-                                if (c == L'\\') {
-                                    fileUrlPath += L'/';
-                                } else {
-                                    fileUrlPath += c;
-                                }
-                            }
+                                        wil::com_ptr<ICoreWebView2WebResourceRequest> request;
+                                        args->get_Request(&request);
+                                        LPWSTR uri = nullptr;
+                                        request->get_Uri(&uri);
+                                        std::wstring uriStr(uri ? uri : L"");
+                                        if (uri) CoTaskMemFree(uri);
 
-                            // Load dashboard.html
-                            std::wstring dashboardPath = fileUrlPath + L"/dashboard_pro.html";
-                            OutputDebugStringW(L"[WebViewManager] Loading professional dashboard\n");
-                            OutputDebugStringW(L"[WebViewManager] URL: ");
-                            OutputDebugStringW(dashboardPath.c_str());
-                            OutputDebugStringW(L"\n");
+                                        struct ResMap { const wchar_t* name; int id; const wchar_t* mime; };
+                                        static const ResMap kMap[] = {
+                                            { L"dashboard_pro.html",     IDR_HTML_DASHBOARD,         L"text/html; charset=utf-8" },
+                                            { L"micro-interactions.css", IDR_CSS_MICRO_INTERACTIONS, L"text/css; charset=utf-8" },
+                                            { L"flow-state.css",         IDR_CSS_FLOW_STATE,         L"text/css; charset=utf-8" },
+                                            { L"micro-interactions.js",  IDR_JS_MICRO_INTERACTIONS,  L"application/javascript; charset=utf-8" },
+                                            { L"mood-engine.js",         IDR_JS_MOOD_ENGINE,         L"application/javascript; charset=utf-8" },
+                                            { L"timer-service.js",       IDR_JS_TIMER_SERVICE,       L"application/javascript; charset=utf-8" },
+                                            { L"gemini-client.js",       IDR_JS_GEMINI_CLIENT,       L"application/javascript; charset=utf-8" },
+                                        };
 
-                            // Navigate to dashboard.html
-                            pThis->m_webView->Navigate(dashboardPath.c_str());
-                            OutputDebugStringW(L"[WebViewManager] Navigation initiated\n");
+                                        for (const auto& m : kMap) {
+                                            if (uriStr.find(m.name) == std::wstring::npos) continue;
+
+                                            std::string content = ResourceLoader::LoadTextResource(m.id);
+                                            if (content.empty()) break;
+
+                                            HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, content.size());
+                                            if (!hGlobal) break;
+                                            void* pBuf = GlobalLock(hGlobal);
+                                            memcpy(pBuf, content.data(), content.size());
+                                            GlobalUnlock(hGlobal);
+
+                                            IStream* stream = nullptr;
+                                            if (FAILED(CreateStreamOnHGlobal(hGlobal, TRUE, &stream))) {
+                                                GlobalFree(hGlobal);
+                                                break;
+                                            }
+
+                                            std::wstring headers = std::wstring(L"Content-Type: ") + m.mime;
+
+                                            wil::com_ptr<ICoreWebView2WebResourceResponse> response;
+                                            pThis->m_environment->CreateWebResourceResponse(
+                                                stream, 200, L"OK", headers.c_str(), &response);
+                                            args->put_Response(response.get());
+
+                                            stream->Release();
+                                            break;
+                                        }
+                                        return S_OK;
+                                    }).Get(), nullptr);
+
+                            OutputDebugStringW(L"[WebViewManager] Embedded resource handler registered\n");
+
+                            // Navigate to the embedded dashboard via virtual host
+                            pThis->m_webView->Navigate(L"https://vigilant.local/dashboard_pro.html");
+                            OutputDebugStringW(L"[WebViewManager] Navigation initiated (virtual host)\n");
 
                             // Setup message handler AFTER navigation
                             pThis->SetupMessageHandler();
@@ -579,6 +616,168 @@ std::string WebViewManager::HandleMessage(const std::string& message) {
                        ",\"taskScheduler\":" + std::string(task ? "true" : "false");
             if (!requestId.empty()) response += ",\"requestId\":" + requestId;
             response += "}";
+        }
+        else if (message.find("clearDatabase") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] Veritabani temizleme istegi alindi\n");
+            bool ok = g_Vault.clearAllData();
+            response = "{\"status\":\"" + std::string(ok ? "success" : "error") + "\"";
+            if (!requestId.empty()) response += ",\"requestId\":" + requestId;
+            response += "}";
+        }
+        else if (message.find("getAIConfig") != std::string::npos) {
+            // Mevcut AI yapilandirmasini dondur
+            std::string provider = g_Gemini.getProviderName();
+            std::string model = g_Gemini.getModel();
+            std::string envVar = g_Gemini.getEnvVarName();
+            bool available = g_Gemini.isAvailable();
+
+            response = "{\"provider\":\"" + EscapeJson(provider) + "\","
+                "\"model\":\"" + EscapeJson(model) + "\","
+                "\"envVar\":\"" + EscapeJson(envVar) + "\","
+                "\"available\":" + std::string(available ? "true" : "false");
+            if (!requestId.empty()) response += ",\"requestId\":" + requestId;
+            response += "}";
+        }
+        else if (message.find("setAIConfig") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] AI yapilandirma istegi alindi\n");
+
+            auto extractStr = [&](const std::string& key) -> std::string {
+                size_t pos = message.find("\"" + key + "\"");
+                if (pos == std::string::npos) return "";
+                size_t colon = message.find(":", pos);
+                if (colon == std::string::npos) return "";
+                size_t qStart = message.find("\"", colon + 1);
+                if (qStart == std::string::npos) return "";
+                size_t qEnd = message.find("\"", qStart + 1);
+                if (qEnd == std::string::npos) return "";
+                return message.substr(qStart + 1, qEnd - qStart - 1);
+            };
+
+            std::string envVar = extractStr("envVar");
+            std::string provider = extractStr("provider");
+            std::string model = extractStr("model");
+
+            if (envVar.empty() || provider.empty() || model.empty()) {
+                response = "{\"status\":\"error\",\"message\":\"Eksik parametre\"";
+                if (!requestId.empty()) response += ",\"requestId\":" + requestId;
+                response += "}";
+            }
+            else {
+                bool ok = g_Gemini.configure(envVar, provider, model);
+                if (ok) {
+                    // Anahtari dogrula
+                    bool valid = g_Gemini.validateApiKey();
+                    if (valid) {
+                        response = "{\"status\":\"success\",\"message\":\"Yapilandirma basarili\"";
+                    }
+                    else {
+                        response = "{\"status\":\"invalid_key\",\"message\":\"Anahtar uyumlu degil\"";
+                    }
+                }
+                else {
+                    response = "{\"status\":\"env_not_found\",\"message\":\"Ortam degiskeni bulunamadi\"";
+                }
+                if (!requestId.empty()) response += ",\"requestId\":" + requestId;
+                response += "}";
+            }
+        }
+        else if (message.find("validateAIKey") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] AI anahtar dogrulama istegi alindi\n");
+            bool available = g_Gemini.isAvailable();
+            bool valid = false;
+            if (available) {
+                valid = g_Gemini.validateApiKey();
+            }
+            response = "{\"available\":" + std::string(available ? "true" : "false") +
+                ",\"valid\":" + std::string(valid ? "true" : "false");
+            if (!requestId.empty()) response += ",\"requestId\":" + requestId;
+            response += "}";
+        }
+        // ── History API: getHistoricalData ──
+        else if (message.find("getHistoricalData") != std::string::npos) {
+            // Parse date parameter
+            auto extractStr = [&](const std::string& key) -> std::string {
+                size_t pos = message.find("\"" + key + "\"");
+                if (pos == std::string::npos) return "";
+                size_t colon = message.find(":", pos);
+                if (colon == std::string::npos) return "";
+                size_t qStart = message.find("\"", colon + 1);
+                if (qStart == std::string::npos) return "";
+                size_t qEnd = message.find("\"", qStart + 1);
+                if (qEnd == std::string::npos) return "";
+                return message.substr(qStart + 1, qEnd - qStart - 1);
+            };
+            std::string date = extractStr("date");
+            if (date.empty()) {
+                // Varsayılan: bugün
+                SYSTEMTIME st;
+                GetLocalTime(&st);
+                char buf[16];
+                sprintf_s(buf, "%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
+                date = buf;
+            }
+
+            auto histData = g_Vault.getHistoricalData(date);
+
+            // Logs
+            auto logs = g_Vault.getLogsForDate(date, 50);
+            nlohmann::json logsJson = nlohmann::json::array();
+            for (const auto& log : logs) {
+                logsJson.push_back({
+                    {"process", log.process},
+                    {"title", log.title},
+                    {"category", log.category},
+                    {"score", log.score},
+                    {"duration", log.duration},
+                    {"source", log.source}
+                });
+            }
+            histData["logs"] = logsJson;
+
+            if (!requestId.empty()) histData["requestId"] = requestId;
+            response = histData.dump();
+        }
+        // ── History API: getDailyTrends ──
+        else if (message.find("getDailyTrends") != std::string::npos) {
+            // Parse days parameter
+            int days = 7;
+            size_t daysPos = message.find("\"days\"");
+            if (daysPos != std::string::npos) {
+                size_t colon = message.find(":", daysPos);
+                if (colon != std::string::npos) {
+                    size_t start = message.find_first_not_of(" \t", colon + 1);
+                    if (start != std::string::npos) {
+                        days = std::atoi(message.c_str() + start);
+                        if (days <= 0 || days > 90) days = 7;
+                    }
+                }
+            }
+
+            auto trends = g_Vault.getDailyTrends(days);
+            nlohmann::json resp;
+            resp["trends"] = trends;
+            resp["days"] = days;
+            if (!requestId.empty()) resp["requestId"] = requestId;
+            response = resp.dump();
+        }
+        // ── History API: saveDailySummary ──
+        else if (message.find("saveDailySummary") != std::string::npos) {
+            SYSTEMTIME st;
+            GetLocalTime(&st);
+            char buf[16];
+            sprintf_s(buf, "%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
+            bool ok = g_Vault.saveDailySummary(std::string(buf));
+            response = "{\"status\":\"" + std::string(ok ? "success" : "no_data") + "\"";
+            if (!requestId.empty()) response += ",\"requestId\":" + requestId;
+            response += "}";
+        }
+        // ── History API: getAvailableDates ──
+        else if (message.find("getAvailableDates") != std::string::npos) {
+            auto dates = g_Vault.getAvailableDates();
+            nlohmann::json resp;
+            resp["dates"] = dates;
+            if (!requestId.empty()) resp["requestId"] = requestId;
+            response = resp.dump();
         }
         else if (message.find("setAutostart") != std::string::npos) {
             bool enable = (message.find("\"enabled\":true") != std::string::npos ||

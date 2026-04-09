@@ -73,7 +73,23 @@ bool DatabaseManager::init() {
         "NEW_SCORE INTEGER);";
     sqlite3_exec(db, sqlAudit, NULL, 0, &zErrMsg);
 
-    // 5. Seed Data (Varsayılan Bilgiler)
+    // 5. DailySummary Tablosu (Günlük özet snapshot'ları)
+    const char* sqlDailySummary =
+        "CREATE TABLE IF NOT EXISTS DailySummary ("
+        "DATE TEXT PRIMARY KEY,"
+        "TOTAL_SEC INTEGER DEFAULT 0,"
+        "PRODUCTIVE_SEC INTEGER DEFAULT 0,"
+        "UNPRODUCTIVE_SEC INTEGER DEFAULT 0,"
+        "NEUTRAL_SEC INTEGER DEFAULT 0,"
+        "PRODUCTIVITY_PCT REAL DEFAULT 0,"
+        "TOP_APP TEXT DEFAULT '',"
+        "ACTIVITY_COUNT INTEGER DEFAULT 0,"
+        "CREATED_AT DATETIME DEFAULT CURRENT_TIMESTAMP);";
+    sqlite3_exec(db, sqlDailySummary, NULL, 0, &zErrMsg);
+
+    sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_activities_date ON Activities(DATE(TIMESTAMP));", NULL, 0, &zErrMsg);
+
+    // 6. Seed Data (Varsayılan Bilgiler)
     const char* seedSql = "INSERT OR IGNORE INTO KnowledgeBase (PROCESS, TITLE_KEYWORD, CATEGORY, SCORE, SOURCE) VALUES "
         "('devenv.exe', '*', 'Yazilim', 10, 'seed'),"
         "('Code.exe', '*', 'Yazilim', 10, 'seed'),"
@@ -651,6 +667,35 @@ bool DatabaseManager::applyOverrides(std::vector<std::pair<std::string, std::str
     return anyApplied;
 }
 
+bool DatabaseManager::clearAllData() {
+    std::lock_guard<std::mutex> lock(db_mutex);
+
+    // Prepared statement'ları finalize et (tablolar silinecek)
+    if (m_stmtLogActivity)    { sqlite3_finalize(m_stmtLogActivity);    m_stmtLogActivity = nullptr; }
+    if (m_stmtUpdateDuration) { sqlite3_finalize(m_stmtUpdateDuration); m_stmtUpdateDuration = nullptr; }
+
+    bool ok = true;
+    const char* tables[] = { "Activities", "KnowledgeBase", "CategoryOverrides", "OverrideAuditLog", "DailySummary" };
+    for (const char* table : tables) {
+        std::string sql = "DELETE FROM " + std::string(table) + ";";
+        char* errMsg = nullptr;
+        if (sqlite3_exec(db, sql.c_str(), NULL, 0, &errMsg) != SQLITE_OK) {
+            std::cerr << "[DB] Tablo temizleme hatasi (" << table << "): " << (errMsg ? errMsg : "?") << std::endl;
+            if (errMsg) sqlite3_free(errMsg);
+            ok = false;
+        }
+    }
+
+    // VACUUM ile bos alani geri kazan
+    sqlite3_exec(db, "VACUUM;", NULL, 0, nullptr);
+
+    // Prepared statement'ları yeniden hazırla
+    prepareStatements();
+
+    std::cout << "[DB] Tum veriler silindi." << std::endl;
+    return ok;
+}
+
 nlohmann::json DatabaseManager::getOverrideAuditLog(int limit) {
     std::lock_guard<std::mutex> lock(db_mutex);
     nlohmann::json result = nlohmann::json::array();
@@ -679,6 +724,320 @@ nlohmann::json DatabaseManager::getOverrideAuditLog(int limit) {
                 {"oldScore", os},
                 {"newScore", ns}
             });
+        }
+        sqlite3_finalize(stmt);
+    }
+    return result;
+}
+
+// ══════════════════════════════════════════
+// History Altyapısı — getHistoricalData
+// ══════════════════════════════════════════
+
+nlohmann::json DatabaseManager::getHistoricalData(const std::string& date) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    json result;
+    result["date"] = date;
+
+    // 1. Önce DailySummary'den bak
+    {
+        sqlite3_stmt* stmt;
+        const char* sql =
+            "SELECT TOTAL_SEC, PRODUCTIVE_SEC, UNPRODUCTIVE_SEC, NEUTRAL_SEC, "
+            "PRODUCTIVITY_PCT, TOP_APP, ACTIVITY_COUNT FROM DailySummary WHERE DATE = ?;";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                int totalSec = sqlite3_column_int(stmt, 0);
+                int prodSec = sqlite3_column_int(stmt, 1);
+                int unprodSec = sqlite3_column_int(stmt, 2);
+                int neutralSec = sqlite3_column_int(stmt, 3);
+                float prodPct = (float)sqlite3_column_double(stmt, 4);
+                const char* topApp = (const char*)sqlite3_column_text(stmt, 5);
+                int actCount = sqlite3_column_int(stmt, 6);
+
+                float unprodPct = totalSec > 0 ? (float)unprodSec / totalSec * 100.0f : 0.0f;
+                float neutPct = totalSec > 0 ? (float)neutralSec / totalSec * 100.0f : 0.0f;
+
+                result["timeBreakdown"] = {
+                    {"totalSec", totalSec},
+                    {"productiveSec", prodSec},
+                    {"unproductiveSec", unprodSec},
+                    {"neutralSec", neutralSec},
+                    {"productivePct", std::round(prodPct * 10.0f) / 10.0f},
+                    {"unproductivePct", std::round(unprodPct * 10.0f) / 10.0f},
+                    {"neutralPct", std::round(neutPct * 10.0f) / 10.0f}
+                };
+                result["topApp"] = topApp ? topApp : "";
+                result["activityCount"] = actCount;
+                result["source"] = "snapshot";
+
+                sqlite3_finalize(stmt);
+                return result;
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    // 2. DailySummary yoksa Activities'den canlı hesapla
+    {
+        sqlite3_stmt* stmt;
+        const char* sql =
+            "SELECT "
+            "  SUM(CASE WHEN COALESCE(k.SCORE, 0) > 0  THEN a.DURATION ELSE 0 END) AS productive, "
+            "  SUM(CASE WHEN COALESCE(k.SCORE, 0) < 0  THEN a.DURATION ELSE 0 END) AS unproductive, "
+            "  SUM(CASE WHEN COALESCE(k.SCORE, 0) = 0  THEN a.DURATION ELSE 0 END) AS neutral, "
+            "  SUM(a.DURATION) AS total, "
+            "  COUNT(*) AS cnt "
+            "FROM Activities a "
+            "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
+            "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
+            "WHERE DATE(a.TIMESTAMP) = ?;";
+
+        int productive = 0, unproductive = 0, neutral = 0, total = 0, cnt = 0;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                productive   = sqlite3_column_int(stmt, 0);
+                unproductive = sqlite3_column_int(stmt, 1);
+                neutral      = sqlite3_column_int(stmt, 2);
+                total        = sqlite3_column_int(stmt, 3);
+                cnt          = sqlite3_column_int(stmt, 4);
+            }
+            sqlite3_finalize(stmt);
+        }
+
+        float prodPct   = total > 0 ? (float)productive   / total * 100.0f : 0.0f;
+        float unprodPct = total > 0 ? (float)unproductive  / total * 100.0f : 0.0f;
+        float neutPct   = total > 0 ? (float)neutral       / total * 100.0f : 0.0f;
+
+        result["timeBreakdown"] = {
+            {"totalSec",        total},
+            {"productiveSec",   productive},
+            {"unproductiveSec", unproductive},
+            {"neutralSec",      neutral},
+            {"productivePct",   std::round(prodPct   * 10.0f) / 10.0f},
+            {"unproductivePct", std::round(unprodPct * 10.0f) / 10.0f},
+            {"neutralPct",      std::round(neutPct   * 10.0f) / 10.0f}
+        };
+        result["activityCount"] = cnt;
+        result["source"] = "live";
+    }
+
+    // Top App
+    {
+        sqlite3_stmt* stmt;
+        const char* sql =
+            "SELECT a.PROCESS, SUM(a.DURATION) AS total_sec "
+            "FROM Activities a WHERE DATE(a.TIMESTAMP) = ? "
+            "GROUP BY a.PROCESS ORDER BY total_sec DESC LIMIT 1;";
+        std::string topApp = "";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char* p = (const char*)sqlite3_column_text(stmt, 0);
+                if (p) topApp = p;
+            }
+            sqlite3_finalize(stmt);
+        }
+        result["topApp"] = topApp;
+    }
+
+    // Top Apps listesi
+    {
+        sqlite3_stmt* stmt;
+        const char* sql =
+            "SELECT a.PROCESS, SUM(a.DURATION) AS total_sec, "
+            "  COALESCE(k.CATEGORY, 'Uncategorized') AS cat "
+            "FROM Activities a "
+            "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
+            "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
+            "WHERE DATE(a.TIMESTAMP) = ? "
+            "GROUP BY a.PROCESS ORDER BY total_sec DESC LIMIT 5;";
+        json topApps = json::array();
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char* proc = (const char*)sqlite3_column_text(stmt, 0);
+                int dur = sqlite3_column_int(stmt, 1);
+                const char* cat = (const char*)sqlite3_column_text(stmt, 2);
+                topApps.push_back({
+                    {"process", proc ? proc : "Unknown"},
+                    {"durationSec", dur},
+                    {"category", cat ? cat : "Uncategorized"}
+                });
+            }
+            sqlite3_finalize(stmt);
+        }
+        result["topApps"] = topApps;
+    }
+
+    return result;
+}
+
+std::vector<ActivityLog> DatabaseManager::getLogsForDate(const std::string& date, int limit) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    std::vector<ActivityLog> logs;
+    const char* sql =
+        "SELECT a.PROCESS, a.TITLE, COALESCE(k.CATEGORY, 'Uncategorized'), COALESCE(k.SCORE, 0), a.DURATION, COALESCE(k.SOURCE, 'seed') "
+        "FROM Activities a "
+        "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
+        "AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
+        "WHERE DATE(a.TIMESTAMP) = ? "
+        "GROUP BY a.ID ORDER BY a.ID DESC LIMIT ?;";
+
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 2, limit);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            ActivityLog log;
+            log.process = (const char*)sqlite3_column_text(stmt, 0);
+            log.title = (const char*)sqlite3_column_text(stmt, 1);
+            log.category = (const char*)sqlite3_column_text(stmt, 2);
+            log.score = sqlite3_column_int(stmt, 3);
+            log.duration = sqlite3_column_int(stmt, 4);
+            log.source = (const char*)sqlite3_column_text(stmt, 5);
+            logs.push_back(log);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return logs;
+}
+
+nlohmann::json DatabaseManager::getDailyTrends(int days) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    json result = json::array();
+
+    // Son N gün için günlük özet (Activities tablosundan canlı hesap)
+    sqlite3_stmt* stmt;
+    const char* sql =
+        "SELECT DATE(a.TIMESTAMP) AS day, "
+        "  SUM(a.DURATION) AS total, "
+        "  SUM(CASE WHEN COALESCE(k.SCORE, 0) > 0  THEN a.DURATION ELSE 0 END) AS productive, "
+        "  SUM(CASE WHEN COALESCE(k.SCORE, 0) < 0  THEN a.DURATION ELSE 0 END) AS unproductive, "
+        "  COUNT(*) AS cnt "
+        "FROM Activities a "
+        "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
+        "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
+        "WHERE a.TIMESTAMP >= DATE('now', ? || ' days') "
+        "GROUP BY day ORDER BY day ASC;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        std::string offset = "-" + std::to_string(days);
+        sqlite3_bind_text(stmt, 1, offset.c_str(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* day = (const char*)sqlite3_column_text(stmt, 0);
+            int total = sqlite3_column_int(stmt, 1);
+            int productive = sqlite3_column_int(stmt, 2);
+            int unproductive = sqlite3_column_int(stmt, 3);
+            int cnt = sqlite3_column_int(stmt, 4);
+
+            float prodPct = total > 0 ? (float)productive / total * 100.0f : 0.0f;
+
+            result.push_back({
+                {"date", day ? day : ""},
+                {"totalSec", total},
+                {"productiveSec", productive},
+                {"unproductiveSec", unproductive},
+                {"productivityPct", std::round(prodPct * 10.0f) / 10.0f},
+                {"activityCount", cnt}
+            });
+        }
+        sqlite3_finalize(stmt);
+    }
+    return result;
+}
+
+bool DatabaseManager::saveDailySummary(const std::string& date) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    sqlite3_stmt* stmt;
+
+    // Verileri hesapla
+    int productive = 0, unproductive = 0, neutral = 0, total = 0, cnt = 0;
+    {
+        const char* sql =
+            "SELECT "
+            "  SUM(CASE WHEN COALESCE(k.SCORE, 0) > 0  THEN a.DURATION ELSE 0 END), "
+            "  SUM(CASE WHEN COALESCE(k.SCORE, 0) < 0  THEN a.DURATION ELSE 0 END), "
+            "  SUM(CASE WHEN COALESCE(k.SCORE, 0) = 0  THEN a.DURATION ELSE 0 END), "
+            "  SUM(a.DURATION), COUNT(*) "
+            "FROM Activities a "
+            "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
+            "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
+            "WHERE DATE(a.TIMESTAMP) = ?;";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                productive   = sqlite3_column_int(stmt, 0);
+                unproductive = sqlite3_column_int(stmt, 1);
+                neutral      = sqlite3_column_int(stmt, 2);
+                total        = sqlite3_column_int(stmt, 3);
+                cnt          = sqlite3_column_int(stmt, 4);
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    if (total == 0) return false; // Veri yoksa kaydetme
+
+    float prodPct = (float)productive / total * 100.0f;
+
+    // Top App
+    std::string topApp = "";
+    {
+        const char* sql =
+            "SELECT a.PROCESS FROM Activities a WHERE DATE(a.TIMESTAMP) = ? "
+            "GROUP BY a.PROCESS ORDER BY SUM(a.DURATION) DESC LIMIT 1;";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char* p = (const char*)sqlite3_column_text(stmt, 0);
+                if (p) topApp = p;
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    // INSERT OR REPLACE
+    const char* sqlInsert =
+        "INSERT INTO DailySummary (DATE, TOTAL_SEC, PRODUCTIVE_SEC, UNPRODUCTIVE_SEC, NEUTRAL_SEC, "
+        "PRODUCTIVITY_PCT, TOP_APP, ACTIVITY_COUNT) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(DATE) DO UPDATE SET "
+        "TOTAL_SEC=excluded.TOTAL_SEC, PRODUCTIVE_SEC=excluded.PRODUCTIVE_SEC, "
+        "UNPRODUCTIVE_SEC=excluded.UNPRODUCTIVE_SEC, NEUTRAL_SEC=excluded.NEUTRAL_SEC, "
+        "PRODUCTIVITY_PCT=excluded.PRODUCTIVITY_PCT, TOP_APP=excluded.TOP_APP, "
+        "ACTIVITY_COUNT=excluded.ACTIVITY_COUNT;";
+    if (sqlite3_prepare_v2(db, sqlInsert, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 2, total);
+        sqlite3_bind_int(stmt, 3, productive);
+        sqlite3_bind_int(stmt, 4, unproductive);
+        sqlite3_bind_int(stmt, 5, neutral);
+        sqlite3_bind_double(stmt, 6, prodPct);
+        sqlite3_bind_text(stmt, 7, topApp.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 8, cnt);
+        bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+        if (ok) {
+            std::cout << "[DB] DailySummary kaydedildi: " << date << std::endl;
+        }
+        return ok;
+    }
+    return false;
+}
+
+nlohmann::json DatabaseManager::getAvailableDates() {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    json result = json::array();
+    sqlite3_stmt* stmt;
+    const char* sql =
+        "SELECT DISTINCT DATE(TIMESTAMP) AS day FROM Activities "
+        "ORDER BY day DESC LIMIT 90;";
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* day = (const char*)sqlite3_column_text(stmt, 0);
+            if (day) result.push_back(day);
         }
         sqlite3_finalize(stmt);
     }

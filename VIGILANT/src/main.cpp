@@ -4,6 +4,7 @@
 #include <thread>
 
 #pragma comment(lib, "dwmapi.lib")
+#include "resource.h"
 #include "Data/DatabaseManager.hpp"
 #include "Core/WindowTracker.hpp"
 #include "Utils/EventQueue.hpp"
@@ -56,7 +57,8 @@ int main() {
     perfLogger.Start(30'000); // 30-second interval
 
     // 1. Create Window Class
-    WNDCLASSEXW wc = { sizeof(wc), CS_HREDRAW | CS_VREDRAW, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, (HBRUSH)GetStockObject(BLACK_BRUSH), nullptr, L"VigilantWindowClass", nullptr };
+    HICON hAppIcon = LoadIconW(GetModuleHandle(nullptr), MAKEINTRESOURCEW(IDI_VIGILANT));
+    WNDCLASSEXW wc = { sizeof(wc), CS_HREDRAW | CS_VREDRAW, WndProc, 0L, 0L, GetModuleHandle(nullptr), hAppIcon, nullptr, (HBRUSH)GetStockObject(BLACK_BRUSH), nullptr, L"VigilantWindowClass", hAppIcon };
     ::RegisterClassExW(&wc);
     OutputDebugStringW(L"Window class registered\n");
 
@@ -72,8 +74,8 @@ int main() {
     BOOL useDarkMode = TRUE;
     DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDarkMode, sizeof(useDarkMode));
 
-    // Initialize system tray icon
-    HICON hTrayIcon = (HICON)LoadImageW(nullptr, IDI_APPLICATION, IMAGE_ICON, 0, 0, LR_SHARED);
+    // Initialize system tray icon with custom VIGILANT icon
+    HICON hTrayIcon = (HICON)LoadImageW(GetModuleHandle(nullptr), MAKEINTRESOURCEW(IDI_VIGILANT), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
     g_TrayManager.Create(hwnd, hTrayIcon, L"VIGILANT - Aktivite \u0130zleme");
     OutputDebugStringW(L"System tray icon created\n");
 

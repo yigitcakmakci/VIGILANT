@@ -78,6 +78,21 @@ public:
 
     // Dashboard Özet Verisi (bugünkü toplam skor, top 3 uygulama, verimli/verimsiz oran)
     nlohmann::json getDashboardSummaryJson();
+
+    // ── History Altyapısı ──
+    // Belirli bir tarihin verilerini döndürür (YYYY-MM-DD formatı)
+    nlohmann::json getHistoricalData(const std::string& date);
+    // Belirli bir tarihin aktivite loglarını döndürür
+    std::vector<ActivityLog> getLogsForDate(const std::string& date, int limit = 50);
+    // Son N günlük trend verilerini döndürür
+    nlohmann::json getDailyTrends(int days = 7);
+    // Günlük özet snapshot'ı kaydeder (DailySummary tablosu)
+    bool saveDailySummary(const std::string& date);
+    // Mevcut tarihleri listeler (veri olan günler)
+    nlohmann::json getAvailableDates();
+
+    // Veritabanı Temizleme — tüm tabloları siler
+    bool clearAllData();
 };
 
 #endif

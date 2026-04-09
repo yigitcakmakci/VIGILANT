@@ -15,6 +15,21 @@ static void DebugLog(const std::string& msg) {
     OutputDebugStringA("\n");
 }
 
+// --- Provider string donusumleri ---
+AIProvider GeminiService::parseProvider(const std::string& str) {
+    if (str == "openai" || str == "OpenAI") return AIProvider::OpenAI;
+    if (str == "anthropic" || str == "Anthropic") return AIProvider::Anthropic;
+    return AIProvider::Gemini;
+}
+
+std::string GeminiService::getProviderName() const {
+    switch (m_provider) {
+    case AIProvider::OpenAI:    return "OpenAI";
+    case AIProvider::Anthropic: return "Anthropic";
+    default:                    return "Gemini";
+    }
+}
+
 // --- Constructor ---
 GeminiService::GeminiService() {
     char buffer[512] = {};
@@ -32,6 +47,154 @@ bool GeminiService::isAvailable() const {
     return !m_apiKey.empty();
 }
 
+// --- Yeniden yapilandirma ---
+bool GeminiService::configure(const std::string& envVarName, const std::string& providerStr, const std::string& model) {
+    m_provider = parseProvider(providerStr);
+    m_model = model;
+    m_envVarName = envVarName;
+
+    char buffer[512] = {};
+    DWORD len = GetEnvironmentVariableA(envVarName.c_str(), buffer, sizeof(buffer));
+    if (len > 0 && len < sizeof(buffer)) {
+        m_apiKey = std::string(buffer, len);
+        DebugLog("[AI] API anahtari yuklendi: " + envVarName + " (" + std::to_string(len) + " karakter) -> " + getProviderName() + "/" + model);
+        return true;
+    }
+    m_apiKey.clear();
+    DebugLog("[AI] HATA: " + envVarName + " ortam degiskeni bulunamadi!");
+    return false;
+}
+
+// --- API anahtar dogrulama ---
+bool GeminiService::validateApiKey() {
+    if (m_apiKey.empty()) return false;
+
+    DebugLog("[AI] API anahtari dogrulaniyor: " + getProviderName() + "/" + m_model);
+
+    // Kucuk bir test istegi gonder
+    std::string testPrompt = "Hi";
+    std::string requestBody;
+
+    switch (m_provider) {
+    case AIProvider::OpenAI:
+        requestBody = "{\"model\":\"" + m_model + "\","
+            "\"messages\":[{\"role\":\"user\",\"content\":\"" + testPrompt + "\"}],"
+            "\"max_tokens\":5}";
+        break;
+    case AIProvider::Anthropic:
+        requestBody = "{\"model\":\"" + m_model + "\","
+            "\"messages\":[{\"role\":\"user\",\"content\":\"" + testPrompt + "\"}],"
+            "\"max_tokens\":5}";
+        break;
+    default: // Gemini
+        requestBody = "{\"contents\":[{\"parts\":[{\"text\":\"" + testPrompt + "\"}]}],"
+            "\"generationConfig\":{\"maxOutputTokens\":5}}";
+        break;
+    }
+
+    std::string response = sendRequest(requestBody);
+    if (response.empty()) {
+        DebugLog("[AI] Dogrulama basarisiz: bos yanit");
+        return false;
+    }
+
+    // Hata kontrolu
+    bool hasError = false;
+    if (response.find("\"error\"") != std::string::npos) {
+        // Gemini ve OpenAI hata formati
+        if (response.find("401") != std::string::npos ||
+            response.find("403") != std::string::npos ||
+            response.find("invalid") != std::string::npos ||
+            response.find("Invalid") != std::string::npos ||
+            response.find("authentication") != std::string::npos ||
+            response.find("unauthorized") != std::string::npos) {
+            hasError = true;
+        }
+    }
+    // Anthropic hata formati
+    if (response.find("\"type\":\"error\"") != std::string::npos) {
+        hasError = true;
+    }
+
+    if (hasError) {
+        DebugLog("[AI] Dogrulama basarisiz: gecersiz anahtar. Yanit: " + response.substr(0, 300));
+        return false;
+    }
+
+    DebugLog("[AI] API anahtari dogrulandi: " + getProviderName());
+    return true;
+}
+
+// --- Saglayiciya gore istek govdesi (classify) ---
+std::string GeminiService::buildProviderRequestBody(const std::string& prompt) const {
+    switch (m_provider) {
+    case AIProvider::OpenAI:
+        return "{\"model\":\"" + m_model + "\","
+            "\"messages\":[{\"role\":\"user\",\"content\":\"" + escapeJson(prompt) + "\"}],"
+            "\"temperature\":0.1,\"max_tokens\":4096}";
+    case AIProvider::Anthropic:
+        return "{\"model\":\"" + m_model + "\","
+            "\"messages\":[{\"role\":\"user\",\"content\":\"" + escapeJson(prompt) + "\"}],"
+            "\"temperature\":0.1,\"max_tokens\":4096}";
+    default: // Gemini
+        return "{\"contents\":[{\"parts\":[{\"text\":\"" + escapeJson(prompt) + "\"}]}],"
+            "\"generationConfig\":{\"temperature\":0.1,\"maxOutputTokens\":4096}}";
+    }
+}
+
+// --- Saglayiciya gore istek govdesi (narrative, system prompt destekli) ---
+std::string GeminiService::buildProviderNarrativeBody(const std::string& systemPrompt, const std::string& userPrompt) const {
+    switch (m_provider) {
+    case AIProvider::OpenAI:
+        return "{\"model\":\"" + m_model + "\","
+            "\"messages\":["
+            "{\"role\":\"system\",\"content\":\"" + escapeJson(systemPrompt) + "\"},"
+            "{\"role\":\"user\",\"content\":\"" + escapeJson(userPrompt) + "\"}"
+            "],\"temperature\":0.1,\"max_tokens\":2048}";
+    case AIProvider::Anthropic:
+        return "{\"model\":\"" + m_model + "\","
+            "\"system\":\"" + escapeJson(systemPrompt) + "\","
+            "\"messages\":[{\"role\":\"user\",\"content\":\"" + escapeJson(userPrompt) + "\"}],"
+            "\"temperature\":0.1,\"max_tokens\":2048}";
+    default: // Gemini
+        return "{\"system_instruction\":{\"parts\":[{\"text\":\"" + escapeJson(systemPrompt) + "\"}]},"
+            "\"contents\":[{\"parts\":[{\"text\":\"" + escapeJson(userPrompt) + "\"}]}],"
+            "\"generationConfig\":{\"temperature\":0.1,\"maxOutputTokens\":2048}}";
+    }
+}
+
+// --- Saglayiciya gore yanit metnini cikar ---
+std::string GeminiService::extractProviderResponseText(const std::string& response) const {
+    try {
+        auto j = nlohmann::json::parse(response);
+
+        switch (m_provider) {
+        case AIProvider::OpenAI:
+            // {"choices":[{"message":{"content":"..."}}]}
+            if (j.contains("choices") && j["choices"].is_array() && !j["choices"].empty()) {
+                return j["choices"][0]["message"]["content"].get<std::string>();
+            }
+            break;
+        case AIProvider::Anthropic:
+            // {"content":[{"text":"..."}]}
+            if (j.contains("content") && j["content"].is_array() && !j["content"].empty()) {
+                return j["content"][0]["text"].get<std::string>();
+            }
+            break;
+        default: // Gemini
+            // {"candidates":[{"content":{"parts":[{"text":"..."}]}}]}
+            if (j.contains("candidates") && j["candidates"].is_array() && !j["candidates"].empty()) {
+                return j["candidates"][0]["content"]["parts"][0]["text"].get<std::string>();
+            }
+            break;
+        }
+    }
+    catch (...) {
+        DebugLog("[AI] extractProviderResponseText: JSON parse hatasi");
+    }
+    return "";
+}
+
 // --- Ana siniflandirma fonksiyonu ---
 std::vector<AILabel> GeminiService::classifyActivities(
     const std::vector<std::pair<std::string, std::string>>& activities)
@@ -45,22 +208,20 @@ std::vector<AILabel> GeminiService::classifyActivities(
         return {};
     }
 
-    DebugLog("[AI] " + std::to_string(activities.size()) + " aktivite siniflandiriliyor...");
+    DebugLog("[AI] " + std::to_string(activities.size()) + " aktivite siniflandiriliyor (" + getProviderName() + "/" + m_model + ")...");
 
     std::string prompt = buildPrompt(activities);
     DebugLog("[AI] Prompt olusturuldu (" + std::to_string(prompt.size()) + " byte)");
 
-    // Gemini API istek govdesi
-    std::string requestBody =
-        "{\"contents\":[{\"parts\":[{\"text\":\"" + escapeJson(prompt) + "\"}]}],"
-        "\"generationConfig\":{\"temperature\":0.1,\"maxOutputTokens\":4096}}";
+    // Saglayiciya gore istek govdesi olustur
+    std::string requestBody = buildProviderRequestBody(prompt);
 
     DebugLog("[AI] Istek gonderiliyor (" + std::to_string(requestBody.size()) + " byte)...");
 
     std::string response = sendRequest(requestBody);
 
     if (response.empty()) {
-        DebugLog("[AI] HATA: Gemini'den bos yanit geldi!");
+        DebugLog("[AI] HATA: AI'dan bos yanit geldi!");
         return {};
     }
 
@@ -77,7 +238,7 @@ std::vector<AILabel> GeminiService::classifyActivities(
                 size_t end = response.find("\"", start);
                 if (end != std::string::npos) {
                     std::string errMsg = response.substr(start, end - start);
-                    DebugLog("[AI] GEMINI API HATASI: " + errMsg);
+                    DebugLog("[AI] API HATASI: " + errMsg);
                 }
             }
         }
@@ -85,67 +246,16 @@ std::vector<AILabel> GeminiService::classifyActivities(
         return {};
     }
 
-    // Gemini yanitindan "text" alanini cikar
-    // Yanit: {"candidates":[{"content":{"parts":[{"text":"..."}]}}]}
-    // "parts" icinde ilk "text" alanini bul
-    std::string extractedText;
-    size_t partsPos = response.find("\"parts\"");
-    if (partsPos != std::string::npos) {
-        size_t textPos = response.find("\"text\"", partsPos);
-        if (textPos != std::string::npos) {
-            // :"  sonrasini bul
-            size_t colonQuote = response.find(":\"", textPos);
-            if (colonQuote == std::string::npos) {
-                // Bazi modeller : " yerine : " (bosluklu) doner
-                colonQuote = response.find(":", textPos);
-                if (colonQuote != std::string::npos) {
-                    size_t q = response.find("\"", colonQuote + 1);
-                    if (q != std::string::npos) colonQuote = q - 1;
-                }
-            }
-
-            if (colonQuote != std::string::npos) {
-                size_t start = colonQuote + 2;
-                size_t end = start;
-                while (end < response.size()) {
-                    if (response[end] == '\\') {
-                        end += 2;
-                        continue;
-                    }
-                    if (response[end] == '"') break;
-                    end++;
-                }
-                extractedText = response.substr(start, end - start);
-
-                // Escape karakterleri geri coz
-                std::string decoded;
-                decoded.reserve(extractedText.size());
-                for (size_t i = 0; i < extractedText.size(); i++) {
-                    if (extractedText[i] == '\\' && i + 1 < extractedText.size()) {
-                        char next = extractedText[i + 1];
-                        if (next == 'n') { decoded += '\n'; i++; }
-                        else if (next == 't') { decoded += '\t'; i++; }
-                        else if (next == '"') { decoded += '"'; i++; }
-                        else if (next == '\\') { decoded += '\\'; i++; }
-                        else if (next == '/') { decoded += '/'; i++; }
-                        else { decoded += next; i++; }
-                    }
-                    else {
-                        decoded += extractedText[i];
-                    }
-                }
-                extractedText = decoded;
-            }
-        }
-    }
+    // Saglayiciya gore yanit metnini cikar
+    std::string extractedText = extractProviderResponseText(response);
 
     if (extractedText.empty()) {
-        DebugLog("[AI] HATA: Gemini yanitindan text cikarilamadi!");
+        DebugLog("[AI] HATA: AI yanitindan text cikarilamadi!");
         DebugLog("[AI] Yanit (ilk 500 byte): " + response.substr(0, 500));
         return {};
     }
 
-    DebugLog("[AI] Gemini text cikartildi (" + std::to_string(extractedText.size()) + " byte):");
+    DebugLog("[AI] Text cikartildi (" + std::to_string(extractedText.size()) + " byte):");
     DebugLog("[AI] " + extractedText.substr(0, 300));
 
     auto labels = parseResponse(extractedText);
@@ -241,7 +351,7 @@ std::vector<AILabel> GeminiService::parseResponse(const std::string& rawText) {
     return labels;
 }
 
-// --- WinHTTP ile Gemini API cagrisi ---
+// --- WinHTTP ile AI API cagrisi (coklu saglayici destekli) ---
 std::string GeminiService::sendRequest(const std::string& jsonBody) {
     std::string result;
 
@@ -256,7 +366,7 @@ std::string GeminiService::sendRequest(const std::string& jsonBody) {
         return result;
     }
 
-    // TLS 1.2+ zorla (Google API TLS 1.2 gerektirir)
+    // TLS 1.2+ zorla
     DWORD dwSecureProtocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
     WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS, &dwSecureProtocols, sizeof(dwSecureProtocols));
 
@@ -266,9 +376,41 @@ std::string GeminiService::sendRequest(const std::string& jsonBody) {
     WinHttpSetOption(hSession, WINHTTP_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
     WinHttpSetOption(hSession, WINHTTP_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
 
+    // Saglayiciya gore host ve path belirle
+    std::wstring host;
+    std::wstring path;
+    std::wstring extraHeaders;
+
+    switch (m_provider) {
+    case AIProvider::OpenAI:
+        host = L"api.openai.com";
+        path = L"/v1/chat/completions";
+        {
+            std::wstring wKey(m_apiKey.begin(), m_apiKey.end());
+            extraHeaders = L"Content-Type: application/json; charset=utf-8\r\nAuthorization: Bearer " + wKey + L"\r\n";
+        }
+        break;
+    case AIProvider::Anthropic:
+        host = L"api.anthropic.com";
+        path = L"/v1/messages";
+        {
+            std::wstring wKey(m_apiKey.begin(), m_apiKey.end());
+            extraHeaders = L"Content-Type: application/json; charset=utf-8\r\nx-api-key: " + wKey + L"\r\nanthropic-version: 2023-06-01\r\n";
+        }
+        break;
+    default: // Gemini
+        host = L"generativelanguage.googleapis.com";
+        {
+            std::wstring wApiKey(m_apiKey.begin(), m_apiKey.end());
+            std::wstring wModel(m_model.begin(), m_model.end());
+            path = L"/v1beta/models/" + wModel + L":generateContent?key=" + wApiKey;
+        }
+        extraHeaders = L"Content-Type: application/json; charset=utf-8\r\n";
+        break;
+    }
+
     HINTERNET hConnect = WinHttpConnect(
-        hSession,
-        L"generativelanguage.googleapis.com",
+        hSession, host.c_str(),
         INTERNET_DEFAULT_HTTPS_PORT, 0);
 
     if (!hConnect) {
@@ -276,9 +418,6 @@ std::string GeminiService::sendRequest(const std::string& jsonBody) {
         WinHttpCloseHandle(hSession);
         return result;
     }
-
-    std::wstring wApiKey(m_apiKey.begin(), m_apiKey.end());
-    std::wstring path = L"/v1beta/models/gemini-2.5-flash:generateContent?key=" + wApiKey;
 
     HINTERNET hRequest = WinHttpOpenRequest(
         hConnect, L"POST", path.c_str(),
@@ -293,11 +432,9 @@ std::string GeminiService::sendRequest(const std::string& jsonBody) {
         return result;
     }
 
-    const wchar_t* headers = L"Content-Type: application/json; charset=utf-8\r\n";
-
-    DebugLog("[AI] WinHTTP istek gonderiliyor...");
+    DebugLog("[AI] WinHTTP istek gonderiliyor (" + getProviderName() + ")...");
     BOOL bSent = WinHttpSendRequest(
-        hRequest, headers, (DWORD)-1,
+        hRequest, extraHeaders.c_str(), (DWORD)-1,
         (LPVOID)jsonBody.c_str(), (DWORD)jsonBody.size(),
         (DWORD)jsonBody.size(), 0);
 
@@ -431,48 +568,33 @@ json GeminiService::generateNarrative(const json& narrativeInput) {
         "Here is today's activity telemetry. Generate the ActivityNarrative JSON.\n\n"
         + narrativeInput.dump(2);
 
-    // Gemini API request with system_instruction
-    std::string requestBody =
-        "{\"system_instruction\":{\"parts\":[{\"text\":\"" + escapeJson(kSystemPrompt) + "\"}]},"
-        "\"contents\":[{\"parts\":[{\"text\":\"" + escapeJson(userPrompt) + "\"}]}],"
-        "\"generationConfig\":{\"temperature\":0.1,\"maxOutputTokens\":2048}}";
+    // Saglayiciya gore istek govdesi olustur
+    std::string requestBody = buildProviderNarrativeBody(kSystemPrompt, userPrompt);
 
-    DebugLog("[AI] Narrative istek gonderiliyor (" + std::to_string(requestBody.size()) + " byte)...");
+    DebugLog("[AI] Narrative istek gonderiliyor (" + std::to_string(requestBody.size()) + " byte, " + getProviderName() + ")...");
 
     std::string response = sendRequest(requestBody);
     if (response.empty()) {
-        DebugLog("[AI] Narrative: Gemini'den bos yanit!");
+        DebugLog("[AI] Narrative: AI'dan bos yanit!");
         return json{{"error", "Empty response from API"}};
     }
 
     // API hata kontrolu
     if (response.find("\"error\"") != std::string::npos &&
-        response.find("\"candidates\"") == std::string::npos) {
+        response.find("\"candidates\"") == std::string::npos &&
+        response.find("\"choices\"") == std::string::npos &&
+        response.find("\"content\"") == std::string::npos) {
         DebugLog("[AI] Narrative: API hatasi - " + response.substr(0, 300));
         return json{{"error", "API returned error"}};
     }
 
-    // Gemini yanit JSON'unu parse et ve text alanini cikar
-    json geminiResponse;
-    try {
-        geminiResponse = json::parse(response);
-    } catch (const std::exception& e) {
-        DebugLog("[AI] Narrative: Gemini yanit parse hatasi: " + std::string(e.what()));
-        return json{{"error", "Failed to parse Gemini response"}};
-    }
-
-    std::string extractedText;
-    try {
-        extractedText = geminiResponse["candidates"][0]["content"]["parts"][0]["text"]
-            .get<std::string>();
-    } catch (...) {
-        DebugLog("[AI] Narrative: text alani cikarilamadi!");
-        return json{{"error", "Failed to extract text from response"}};
-    }
+    // Saglayiciya gore yanit metnini cikar
+    std::string extractedText = extractProviderResponseText(response);
 
     if (extractedText.empty()) {
-        DebugLog("[AI] Narrative: Bos text alani!");
-        return json{{"error", "Empty text in response"}};
+        DebugLog("[AI] Narrative: text alani cikarilamadi!");
+        DebugLog("[AI] Yanit (ilk 500 byte): " + response.substr(0, 500));
+        return json{{"error", "Failed to extract text from response"}};
     }
 
     DebugLog("[AI] Narrative text cikartildi (" + std::to_string(extractedText.size()) + " byte)");
