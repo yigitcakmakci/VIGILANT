@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>
 #include "Utils/json.hpp"
 
 // Desteklenen AI saglayicilari
@@ -48,6 +49,22 @@ public:
     // Activity Narrative: deterministic JSON ciktisi ureten AI cagrisi
     nlohmann::json generateNarrative(const nlohmann::json& narrativeInput);
 
+    // Generic prompt → raw text response (system + user prompt)
+    // Returns extracted response text, or empty string on failure.
+    std::string sendPrompt(const std::string& systemPrompt,
+                           const std::string& userPrompt);
+
+    // ── Token Odometer ─────────────────────────────────────────────────
+    static constexpr int64_t kDailyTokenLimit = 1'000'000;
+
+    int64_t getDailyTotalTokens() const { return m_dailyTotalTokens; }
+    int     getLastRequestTokens() const { return m_lastRequestTokens; }
+    bool    hasPendingTokenUpdate() const { return m_hasPendingTokenUpdate; }
+    void    clearPendingTokenUpdate() { m_hasPendingTokenUpdate = false; }
+
+    // Returns AiTokenUsageUpdated event JSON and clears pending flag
+    std::string consumeTokenUsageEventJson();
+
 private:
     AIProvider  m_provider = AIProvider::Gemini;
     std::string m_apiKey;
@@ -77,6 +94,13 @@ private:
 
     // Provider string → enum donusumu
     static AIProvider parseProvider(const std::string& str);
+
+    // ── Token Odometer internals ───────────────────────────────────────
+    void extractTokenUsage(const std::string& rawApiResponse);
+
+    int64_t m_dailyTotalTokens    = 0;
+    int     m_lastRequestTokens   = 0;
+    bool    m_hasPendingTokenUpdate = false;
 };
 
 #endif

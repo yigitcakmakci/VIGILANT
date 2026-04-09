@@ -9,6 +9,8 @@
 #include "Utils/EventQueue.hpp"
 #include "Utils/json.hpp"
 
+struct TickRecord;  // forward — defined in AI/AutoTickerTickEngine.hpp
+
 // Geçmiş kayıtları ekrana basmak için kullanılan yapı
 struct ActivityLog {
     std::string process = "";
@@ -90,6 +92,39 @@ public:
     bool saveDailySummary(const std::string& date);
     // Mevcut tarihleri listeler (veri olan günler)
     nlohmann::json getAvailableDates();
+
+    // ── Interview Result Persistence ──
+    // Saves a finalized interview result document (session + messages + slots)
+    bool saveInterviewResult(const std::string& sessionId,
+                             const std::string& resultJson,
+                             const std::string& endedBy,
+                             int questionCount,
+                             int maxQuestions);
+    // Saves individual transcript messages (batch insert)
+    bool saveInterviewMessages(const std::string& sessionId,
+                               const nlohmann::json& transcriptArray);
+    // Retrieves the full interview result JSON for a session
+    nlohmann::json getInterviewResult(const std::string& sessionId);
+    // Lists recent interview session IDs
+    nlohmann::json getRecentInterviewSessions(int limit = 10);
+
+    // ── Auto-Ticker Audit Log (idempotent tick tracking) ──
+    // Inserts a tick record; returns false if duplicate (journalEntryId + microTaskId)
+    bool insertAutoTick(const std::string& journalEntryId,
+                        const std::string& microTaskId,
+                        const std::string& interviewSessionId,
+                        const std::string& verdict,
+                        double confidence,
+                        const std::string& ts,
+                        const std::string& modelVersion);
+    // Returns true if a tick already exists for (journalEntryId, microTaskId)
+    bool hasAutoTick(const std::string& journalEntryId,
+                     const std::string& microTaskId);
+    // Returns tick history for a specific microTask within a session
+    std::vector<TickRecord> getAutoTickHistory(const std::string& interviewSessionId,
+                                               const std::string& microTaskId);
+    // Returns all ticks sourced from a specific journal entry
+    std::vector<TickRecord> getAutoTicksByJournal(const std::string& journalEntryId);
 
     // Veritabanı Temizleme — tüm tabloları siler
     bool clearAllData();

@@ -98,18 +98,10 @@ bool GeminiService::validateApiKey() {
         return false;
     }
 
-    // Hata kontrolu
+    // Hata kontrolu — herhangi bir API hatasi dogrulamayi basarisiz kilar
     bool hasError = false;
     if (response.find("\"error\"") != std::string::npos) {
-        // Gemini ve OpenAI hata formati
-        if (response.find("401") != std::string::npos ||
-            response.find("403") != std::string::npos ||
-            response.find("invalid") != std::string::npos ||
-            response.find("Invalid") != std::string::npos ||
-            response.find("authentication") != std::string::npos ||
-            response.find("unauthorized") != std::string::npos) {
-            hasError = true;
-        }
+        hasError = true;
     }
     // Anthropic hata formati
     if (response.find("\"type\":\"error\"") != std::string::npos) {
@@ -224,6 +216,9 @@ std::vector<AILabel> GeminiService::classifyActivities(
         DebugLog("[AI] HATA: AI'dan bos yanit geldi!");
         return {};
     }
+
+    // Token Odometer: kullanim verisini cikar
+    extractTokenUsage(response);
 
     DebugLog("[AI] Yanit alindi (" + std::to_string(response.size()) + " byte)");
 
@@ -478,13 +473,10 @@ std::string GeminiService::sendRequest(const std::string& jsonBody) {
     if (statusCode != 200) {
         DebugLog("[AI] HATA: API " + std::to_string(statusCode) + " dondurdu!");
         DebugLog("[AI] Yanit: " + result.substr(0, 500));
-        WinHttpCloseHandle(hRequest);
-        WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
-        return ""; // Hata durumunda bos dondur
     }
-
-    DebugLog("[AI] Basarili yanit alindi (" + std::to_string(result.size()) + " byte)");
+    else {
+        DebugLog("[AI] Basarili yanit alindi (" + std::to_string(result.size()) + " byte)");
+    }
 
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
@@ -521,6 +513,73 @@ std::string GeminiService::escapeJson(const std::string& str) {
         }
     }
     return out;
+}
+
+// --- Token Odometer: API yanitindan token kullanim bilgisini cikarir ---
+void GeminiService::extractTokenUsage(const std::string& rawApiResponse) {
+    try {
+        auto j = json::parse(rawApiResponse);
+
+        int tokenCount = 0;
+
+        // Gemini: usageMetadata.totalTokenCount
+        if (j.contains("usageMetadata") && j["usageMetadata"].is_object()) {
+            const auto& meta = j["usageMetadata"];
+            if (meta.contains("totalTokenCount") && meta["totalTokenCount"].is_number_integer()) {
+                tokenCount = meta["totalTokenCount"].get<int>();
+            }
+        }
+        // OpenAI: usage.total_tokens
+        else if (j.contains("usage") && j["usage"].is_object()) {
+            const auto& usage = j["usage"];
+            if (usage.contains("total_tokens") && usage["total_tokens"].is_number_integer()) {
+                tokenCount = usage["total_tokens"].get<int>();
+            }
+        }
+        // Anthropic: usage.input_tokens + usage.output_tokens
+        else if (j.contains("usage") && j["usage"].is_object()) {
+            const auto& usage = j["usage"];
+            int input = 0, output = 0;
+            if (usage.contains("input_tokens") && usage["input_tokens"].is_number_integer())
+                input = usage["input_tokens"].get<int>();
+            if (usage.contains("output_tokens") && usage["output_tokens"].is_number_integer())
+                output = usage["output_tokens"].get<int>();
+            tokenCount = input + output;
+        }
+
+        if (tokenCount > 0) {
+            m_lastRequestTokens = tokenCount;
+            m_dailyTotalTokens += tokenCount;
+            m_hasPendingTokenUpdate = true;
+
+            DebugLog("[AI][TokenOdometer] Bu istek: " + std::to_string(tokenCount) +
+                     " | Gunluk toplam: " + std::to_string(m_dailyTotalTokens));
+        }
+    }
+    catch (const std::exception& e) {
+        DebugLog("[AI][TokenOdometer] JSON parse hatasi: " + std::string(e.what()));
+    }
+    catch (...) {
+        DebugLog("[AI][TokenOdometer] Bilinmeyen hata");
+    }
+}
+
+// --- Token Odometer: UI'a gonderilecek event JSON'unu uretir ---
+std::string GeminiService::consumeTokenUsageEventJson() {
+    m_hasPendingTokenUpdate = false;
+    try {
+        json evt;
+        evt["type"] = "AiTokenUsageUpdated";
+        evt["payload"] = {
+            {"tokensUsedThisRequest", m_lastRequestTokens},
+            {"dailyTotalTokens",     m_dailyTotalTokens},
+            {"dailyLimit",           kDailyTokenLimit}
+        };
+        return evt.dump();
+    }
+    catch (...) {
+        return "";
+    }
 }
 
 // --- Activity Narrative Generator ---
@@ -578,6 +637,9 @@ json GeminiService::generateNarrative(const json& narrativeInput) {
         DebugLog("[AI] Narrative: AI'dan bos yanit!");
         return json{{"error", "Empty response from API"}};
     }
+
+    // Token Odometer: kullanim verisini cikar
+    extractTokenUsage(response);
 
     // API hata kontrolu
     if (response.find("\"error\"") != std::string::npos &&
@@ -663,4 +725,40 @@ json GeminiService::generateNarrative(const json& narrativeInput) {
 
     DebugLog("[AI] Narrative basariyla olusturuldu (confidence=" + std::to_string(conf) + ")");
     return narrativeJson;
+}
+
+// --- Generic prompt → raw text response ---
+std::string GeminiService::sendPrompt(const std::string& systemPrompt,
+                                       const std::string& userPrompt) {
+    if (!isAvailable()) {
+        DebugLog("[AI] sendPrompt: API anahtari yok, iptal.");
+        return "";
+    }
+
+    std::string requestBody = buildProviderNarrativeBody(systemPrompt, userPrompt);
+    DebugLog("[AI] sendPrompt: istek gonderiliyor (" +
+             std::to_string(requestBody.size()) + " byte, " + getProviderName() + ")...");
+
+    std::string response = sendRequest(requestBody);
+    if (response.empty()) {
+        DebugLog("[AI] sendPrompt: bos yanit!");
+        return "";
+    }
+
+    // Token Odometer: kullanim verisini cikar
+    extractTokenUsage(response);
+
+    // API hata kontrolu
+    if (response.find("\"error\"") != std::string::npos &&
+        response.find("\"candidates\"") == std::string::npos &&
+        response.find("\"choices\"") == std::string::npos &&
+        response.find("\"content\"") == std::string::npos) {
+        DebugLog("[AI] sendPrompt: API hatasi - " + response.substr(0, 300));
+        return "";
+    }
+
+    std::string extractedText = extractProviderResponseText(response);
+    DebugLog("[AI] sendPrompt: yanit cikarildi (" +
+             std::to_string(extractedText.size()) + " byte)");
+    return extractedText;
 }

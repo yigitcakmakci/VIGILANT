@@ -11,3 +11,4 @@
 #define IDR_JS_MOOD_ENGINE          105
 #define IDR_JS_TIMER_SERVICE        106
 #define IDR_JS_GEMINI_CLIENT        107
+#define IDR_JS_INTERVIEW_WIDGET     108

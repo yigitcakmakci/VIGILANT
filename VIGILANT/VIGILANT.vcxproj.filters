@@ -1,145 +1,305 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Kaynak Dosyalar">
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
       <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
     </Filter>
+    <Filter Include="Kaynak Dosyalar\AI">
+      <UniqueIdentifier>{B1A1F1A1-0001-0001-0001-000000000001}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Kaynak Dosyalar\Core">
+      <UniqueIdentifier>{B1A1F1A1-0001-0001-0001-000000000002}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Kaynak Dosyalar\Data">
+      <UniqueIdentifier>{B1A1F1A1-0001-0001-0001-000000000003}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Kaynak Dosyalar\UI">
+      <UniqueIdentifier>{B1A1F1A1-0001-0001-0001-000000000004}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Kaynak Dosyalar\Utils">
+      <UniqueIdentifier>{B1A1F1A1-0001-0001-0001-000000000005}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Ust Bilgi Dosyalari">
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
       <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Ust Bilgi Dosyalari\AI">
+      <UniqueIdentifier>{B2A2F2A2-0002-0002-0002-000000000001}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Ust Bilgi Dosyalari\Core">
+      <UniqueIdentifier>{B2A2F2A2-0002-0002-0002-000000000002}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Ust Bilgi Dosyalari\Data">
+      <UniqueIdentifier>{B2A2F2A2-0002-0002-0002-000000000003}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Ust Bilgi Dosyalari\UI">
+      <UniqueIdentifier>{B2A2F2A2-0002-0002-0002-000000000004}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Ust Bilgi Dosyalari\Utils">
+      <UniqueIdentifier>{B2A2F2A2-0002-0002-0002-000000000005}</UniqueIdentifier>
     </Filter>
     <Filter Include="Kaynak Dosyalari">
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Web">
+      <UniqueIdentifier>{C3A3F3A3-0003-0003-0003-000000000001}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Web\HTML">
+      <UniqueIdentifier>{C3A3F3A3-0003-0003-0003-000000000002}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Web\CSS">
+      <UniqueIdentifier>{C3A3F3A3-0003-0003-0003-000000000003}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Web\JS">
+      <UniqueIdentifier>{C3A3F3A3-0003-0003-0003-000000000004}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="TypeScript">
+      <UniqueIdentifier>{D4A4F4A4-0004-0004-0004-000000000001}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="TypeScript\Dashboard">
+      <UniqueIdentifier>{D4A4F4A4-0004-0004-0004-000000000002}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="TypeScript\Gemini">
+      <UniqueIdentifier>{D4A4F4A4-0004-0004-0004-000000000003}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="TypeScript\Interview">
+      <UniqueIdentifier>{D4A4F4A4-0004-0004-0004-000000000004}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Belgeler">
+      <UniqueIdentifier>{E5A5F5A5-0005-0005-0005-000000000001}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Belgeler\Ornekler">
+      <UniqueIdentifier>{E5A5F5A5-0005-0005-0005-000000000002}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Vendor">
+      <UniqueIdentifier>{F6A6F6A6-0006-0006-0006-000000000001}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\Core\WindowTracker.cpp">
-      <Filter>Kaynak Dosyalar</Filter>
+    <ClCompile Include="src\AI\AIClassifierTask.cpp">
+      <Filter>Kaynak Dosyalar\AI</Filter>
     </ClCompile>
-    <ClCompile Include="src\UI\BrowserBridge.cpp">
-      <Filter>Kaynak Dosyalar</Filter>
+    <ClCompile Include="src\AI\GeminiService.cpp">
+      <Filter>Kaynak Dosyalar\AI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AI\InterviewHandler.cpp">
+      <Filter>Kaynak Dosyalar\AI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AI\InterviewSlotFiller.cpp">
+      <Filter>Kaynak Dosyalar\AI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Core\WindowTracker.cpp">
+      <Filter>Kaynak Dosyalar\Core</Filter>
     </ClCompile>
     <ClCompile Include="src\Data\DatabaseManager.cpp">
-      <Filter>Kaynak Dosyalar</Filter>
+      <Filter>Kaynak Dosyalar\Data</Filter>
     </ClCompile>
-    <ClCompile Include="vendor\sqlite\sqlite3.c">
-      <Filter>Kaynak Dosyalar</Filter>
+    <ClCompile Include="src\UI\BrowserBridge.cpp">
+      <Filter>Kaynak Dosyalar\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\TrayManager.cpp">
+      <Filter>Kaynak Dosyalar\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\WebViewManager.cpp">
-      <Filter>Kaynak Dosyalar</Filter>
+      <Filter>Kaynak Dosyalar\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Utils\EventBridge.cpp">
+      <Filter>Kaynak Dosyalar\Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Utils\StartupManager.cpp">
+      <Filter>Kaynak Dosyalar\Utils</Filter>
     </ClCompile>
     <ClCompile Include="src\Globals.cpp">
-      <Filter>Kaynak Dosyalar</Filter>
-    </ClCompile>
-    <ClCompile Include="src\Workers.cpp">
       <Filter>Kaynak Dosyalar</Filter>
     </ClCompile>
     <ClCompile Include="src\Instances.cpp">
       <Filter>Kaynak Dosyalar</Filter>
     </ClCompile>
-    <ClCompile Include="src\AI\AIClassifierTask.cpp">
-      <Filter>Kaynak Dosyalar</Filter>
-    </ClCompile>
-    <ClCompile Include="src\AI\GeminiService.cpp">
-      <Filter>Kaynak Dosyalar</Filter>
-    </ClCompile>
-    <ClCompile Include="src\Utils\EventBridge.cpp">
-      <Filter>Kaynak Dosyalar</Filter>
-    </ClCompile>
-    <ClCompile Include="src\Utils\StartupManager.cpp">
+    <ClCompile Include="src\main.cpp">
       <Filter>Kaynak Dosyalar</Filter>
     </ClCompile>
     <ClCompile Include="src\Window.cpp">
       <Filter>Kaynak Dosyalar</Filter>
     </ClCompile>
-    <ClCompile Include="src\UI\TrayManager.cpp">
+    <ClCompile Include="src\Workers.cpp">
       <Filter>Kaynak Dosyalar</Filter>
     </ClCompile>
-    <ClCompile Include="src\main.cpp">
+    <ClCompile Include="vendor\sqlite\sqlite3.c">
+      <Filter>Vendor</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AI\AutoTickerMatcher.cpp">
       <Filter>Kaynak Dosyalar</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="include\Core\WindowTracker.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
-    </ClInclude>
-    <ClInclude Include="include\UI\BrowserBridge.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
-    </ClInclude>
-    <ClInclude Include="include\Utils\EventQueue.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
-    </ClInclude>
-    <ClInclude Include="include\Data\DatabaseManager.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
-    </ClInclude>
-    <ClInclude Include="vendor\sqlite\sqlite3.h">
-      <Filter>Ust Bilgi Dosyalari</Filter>
-    </ClInclude>
     <ClInclude Include="include\AI\AIClassifierTask.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
+      <Filter>Ust Bilgi Dosyalari\AI</Filter>
     </ClInclude>
     <ClInclude Include="include\AI\GeminiService.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
+      <Filter>Ust Bilgi Dosyalari\AI</Filter>
     </ClInclude>
-    <ClInclude Include="include\Utils\EventBridge.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
+    <ClInclude Include="include\AI\InterviewHandler.hpp">
+      <Filter>Ust Bilgi Dosyalari\AI</Filter>
     </ClInclude>
-    <ClInclude Include="include\Utils\RingBuffer.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
+    <ClInclude Include="include\AI\InterviewSession.hpp">
+      <Filter>Ust Bilgi Dosyalari\AI</Filter>
     </ClInclude>
-    <ClInclude Include="include\Utils\StartupManager.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
+    <ClInclude Include="include\AI\InterviewSlotFiller.hpp">
+      <Filter>Ust Bilgi Dosyalari\AI</Filter>
+    </ClInclude>
+    <ClInclude Include="include\AI\InterviewResult.hpp">
+      <Filter>Ust Bilgi Dosyalari\AI</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Core\WindowTracker.hpp">
+      <Filter>Ust Bilgi Dosyalari\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Data\DatabaseManager.hpp">
+      <Filter>Ust Bilgi Dosyalari\Data</Filter>
+    </ClInclude>
+    <ClInclude Include="include\UI\BrowserBridge.hpp">
+      <Filter>Ust Bilgi Dosyalari\UI</Filter>
     </ClInclude>
     <ClInclude Include="include\UI\TrayManager.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
+      <Filter>Ust Bilgi Dosyalari\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Utils\EventBridge.hpp">
+      <Filter>Ust Bilgi Dosyalari\Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Utils\EventQueue.hpp">
+      <Filter>Ust Bilgi Dosyalari\Utils</Filter>
     </ClInclude>
     <ClInclude Include="include\Utils\PerfCounters.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
+      <Filter>Ust Bilgi Dosyalari\Utils</Filter>
     </ClInclude>
     <ClInclude Include="include\Utils\PerfSnapshot.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
+      <Filter>Ust Bilgi Dosyalari\Utils</Filter>
     </ClInclude>
     <ClInclude Include="include\Utils\ProcessCache.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
+      <Filter>Ust Bilgi Dosyalari\Utils</Filter>
     </ClInclude>
     <ClInclude Include="include\Utils\ResourceLoader.hpp">
-      <Filter>Ust Bilgi Dosyalari</Filter>
+      <Filter>Ust Bilgi Dosyalari\Utils</Filter>
     </ClInclude>
-    <ClInclude Include="resource.h">
+    <ClInclude Include="include\Utils\RingBuffer.hpp">
+      <Filter>Ust Bilgi Dosyalari\Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Utils\StartupManager.hpp">
+      <Filter>Ust Bilgi Dosyalari\Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="resources\resource.h">
       <Filter>Kaynak Dosyalari</Filter>
     </ClInclude>
+    <ClInclude Include="vendor\sqlite\sqlite3.h">
+      <Filter>Vendor</Filter>
+    </ClInclude>
+    <ClInclude Include="include\AI\GoalTree.hpp">
+      <Filter>Ust Bilgi Dosyalari</Filter>
+    </ClInclude>
+    <ClInclude Include="include\AI\AutoTickerMatcher.hpp">
+      <Filter>Ust Bilgi Dosyalari</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <None Include="ts\dashboard\dom-updater.ts">
+      <Filter>TypeScript\Dashboard</Filter>
+    </None>
+    <None Include="ts\dashboard\flow-state-controller.ts">
+      <Filter>TypeScript\Dashboard</Filter>
+    </None>
+    <None Include="ts\dashboard\flow-state-controller.test.ts">
+      <Filter>TypeScript\Dashboard</Filter>
+    </None>
+    <None Include="ts\dashboard\mood-engine.ts">
+      <Filter>TypeScript\Dashboard</Filter>
+    </None>
+    <None Include="ts\dashboard\mood-engine.test.ts">
+      <Filter>TypeScript\Dashboard</Filter>
+    </None>
+    <None Include="ts\dashboard\pubsub.ts">
+      <Filter>TypeScript\Dashboard</Filter>
+    </None>
+    <None Include="ts\dashboard\timer-service.ts">
+      <Filter>TypeScript\Dashboard</Filter>
+    </None>
+    <None Include="ts\dashboard\timer-store.ts">
+      <Filter>TypeScript\Dashboard</Filter>
+    </None>
+    <None Include="ts\dashboard\timer-store.test.ts">
+      <Filter>TypeScript\Dashboard</Filter>
+    </None>
+    <None Include="ts\dashboard\tsconfig.json">
+      <Filter>TypeScript\Dashboard</Filter>
+    </None>
+    <None Include="ts\gemini\config.ts">
+      <Filter>TypeScript\Gemini</Filter>
+    </None>
+    <None Include="ts\gemini\example.ts">
+      <Filter>TypeScript\Gemini</Filter>
+    </None>
+    <None Include="ts\gemini\fetch-retry.ts">
+      <Filter>TypeScript\Gemini</Filter>
+    </None>
+    <None Include="ts\gemini\gemini-client.ts">
+      <Filter>TypeScript\Gemini</Filter>
+    </None>
+    <None Include="ts\gemini\index.ts">
+      <Filter>TypeScript\Gemini</Filter>
+    </None>
+    <None Include="ts\gemini\logger.ts">
+      <Filter>TypeScript\Gemini</Filter>
+    </None>
+    <None Include="ts\gemini\rate-limiter.ts">
+      <Filter>TypeScript\Gemini</Filter>
+    </None>
+    <None Include="ts\gemini\tsconfig.json">
+      <Filter>TypeScript\Gemini</Filter>
+    </None>
+    <None Include="ts\gemini\types.ts">
+      <Filter>TypeScript\Gemini</Filter>
+    </None>
+    <None Include="ts\interview\event-bridge.ts">
+      <Filter>TypeScript\Interview</Filter>
+    </None>
+    <None Include="ts\interview\slot-filler-types.ts">
+      <Filter>TypeScript\Interview</Filter>
+    </None>
+    <None Include="ts\interview\interview-result-types.ts">
+      <Filter>TypeScript\Interview</Filter>
+    </None>
+    <None Include="ts\interview\slot-filler-ui.ts">
+      <Filter>TypeScript\Interview</Filter>
+    </None>
+    <None Include="ts\interview\interview-result-types.test.ts">
+      <Filter>TypeScript\Interview</Filter>
+    </None>
+    <None Include="ts\interview\tsconfig.test.json">
+      <Filter>TypeScript\Interview</Filter>
+    </None>
+    <None Include="docs\OPTIMIZATION_PLAN.md">
+      <Filter>Belgeler</Filter>
+    </None>
+    <None Include="docs\PERF_RUNBOOK.md">
+      <Filter>Belgeler</Filter>
+    </None>
     <None Include="dashboard_pro.html" />
-    <None Include="ts\dashboard\dom-updater.ts" />
-    <None Include="ts\dashboard\pubsub.ts" />
-    <None Include="ts\dashboard\timer-service.ts" />
-    <None Include="ts\dashboard\timer-store.test.ts" />
-    <None Include="ts\dashboard\timer-store.ts" />
-    <None Include="ts\dashboard\tsconfig.json" />
-    <None Include="ts\dashboard\mood-engine.ts" />
-    <None Include="ts\dashboard\mood-engine.test.ts" />
-    <None Include="ts\gemini\tsconfig.json" />
-    <None Include="ts\gemini\types.ts" />
-    <None Include="ts\gemini\config.ts" />
-    <None Include="ts\gemini\rate-limiter.ts" />
-    <None Include="ts\gemini\logger.ts" />
-    <None Include="ts\gemini\fetch-retry.ts" />
-    <None Include="ts\gemini\gemini-client.ts" />
-    <None Include="ts\gemini\index.ts" />
-    <None Include="ts\gemini\example.ts" />
-    <None Include="docs\OPTIMIZATION_PLAN.md" />
-    <None Include="docs\PERF_RUNBOOK.md" />
+    <None Include="flow-state.css" />
     <None Include="micro-interactions.css" />
     <None Include="micro-interactions.js" />
-    <None Include="ts\dashboard\flow-state-controller.ts" />
-    <None Include="flow-state.css" />
-    <None Include="ts\dashboard\flow-state-controller.test.ts" />
+    <None Include="tests\build_and_run_tests.bat">
+      <Filter>Kaynak Dosyalar</Filter>
+    </None>
+    <None Include="ts\interview\goal-tree-schema.test.ts" />
+    <None Include="ts\interview\goal-tree-schema.ts" />
+    <None Include="ts\interview\goal-tree-types.ts" />
+    <None Include="ts\interview\goal-tree-ui.ts" />
+    <None Include="VIGILANT\ts\interview\goal-tree-replanner.ts" />
+    <None Include="ts\interview\auto-ticker-types.ts" />
+    <None Include="ts\interview\auto-ticker-ui.ts" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="VIGILANT.rc">
+    <ResourceCompile Include="resources\VIGILANT.rc">
       <Filter>Kaynak Dosyalari</Filter>
     </ResourceCompile>
   </ItemGroup>

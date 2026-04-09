@@ -20,7 +20,13 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\AI\AIClassifierTask.cpp" />
+    <ClCompile Include="src\AI\AutoTickerMatcher.cpp" />
+    <ClCompile Include="src\AI\AutoTickerTickEngine.cpp" />
+    <ClCompile Include="src\AI\AutoTickerVerifier.cpp" />
+    <ClCompile Include="src\AI\AutoTickerVersionGuard.cpp" />
     <ClCompile Include="src\AI\GeminiService.cpp" />
+    <ClCompile Include="src\AI\InterviewHandler.cpp" />
+    <ClCompile Include="src\AI\InterviewSlotFiller.cpp" />
     <ClCompile Include="src\Core\WindowTracker.cpp" />
     <ClCompile Include="src\Instances.cpp" />
     <ClCompile Include="src\UI\BrowserBridge.cpp" />
@@ -37,7 +43,16 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\AI\AIClassifierTask.hpp" />
+    <ClInclude Include="include\AI\AutoTickerMatcher.hpp" />
+    <ClInclude Include="include\AI\AutoTickerTickEngine.hpp" />
+    <ClInclude Include="include\AI\AutoTickerVerifier.hpp" />
+    <ClInclude Include="include\AI\AutoTickerVersionGuard.hpp" />
     <ClInclude Include="include\AI\GeminiService.hpp" />
+    <ClInclude Include="include\AI\GoalTree.hpp" />
+    <ClInclude Include="include\AI\InterviewHandler.hpp" />
+    <ClInclude Include="include\AI\InterviewResult.hpp" />
+    <ClInclude Include="include\AI\InterviewSession.hpp" />
+    <ClInclude Include="include\AI\InterviewSlotFiller.hpp" />
     <ClInclude Include="include\Core\WindowTracker.hpp" />
     <ClInclude Include="include\UI\BrowserBridge.hpp" />
     <ClInclude Include="include\UI\TrayManager.hpp" />
@@ -50,7 +65,7 @@
     <ClInclude Include="include\Utils\ResourceLoader.hpp" />
     <ClInclude Include="include\Utils\RingBuffer.hpp" />
     <ClInclude Include="include\Utils\StartupManager.hpp" />
-    <ClInclude Include="resource.h" />
+    <ClInclude Include="resources\resource.h" />
     <ClInclude Include="vendor\sqlite\sqlite3.h" />
   </ItemGroup>
   <ItemGroup>
@@ -60,6 +75,7 @@
     <None Include="flow-state.css" />
     <None Include="micro-interactions.css" />
     <None Include="micro-interactions.js" />
+    <None Include="tests\build_and_run_tests.bat" />
     <None Include="ts\dashboard\dom-updater.ts" />
     <None Include="ts\dashboard\flow-state-controller.test.ts" />
     <None Include="ts\dashboard\flow-state-controller.ts" />
@@ -79,9 +95,28 @@
     <None Include="ts\gemini\rate-limiter.ts" />
     <None Include="ts\gemini\tsconfig.json" />
     <None Include="ts\gemini\types.ts" />
+    <None Include="ts\interview\auto-ticker-tick-types.ts" />
+    <None Include="ts\interview\auto-ticker-tick-ui.ts" />
+    <None Include="ts\interview\auto-ticker-types.ts" />
+    <None Include="ts\interview\auto-ticker-ui.ts" />
+    <None Include="ts\interview\auto-ticker-verifier-types.ts" />
+    <None Include="ts\interview\auto-ticker-verifier-ui.ts" />
+    <None Include="ts\interview\auto-ticker-version-types.ts" />
+    <None Include="ts\interview\auto-ticker-version-ui.ts" />
+    <None Include="ts\interview\event-bridge.ts" />
+    <None Include="ts\interview\goal-tree-schema.test.ts" />
+    <None Include="ts\interview\goal-tree-schema.ts" />
+    <None Include="ts\interview\goal-tree-types.ts" />
+    <None Include="ts\interview\goal-tree-ui.ts" />
+    <None Include="ts\interview\interview-result-types.test.ts" />
+    <None Include="ts\interview\interview-result-types.ts" />
+    <None Include="ts\interview\slot-filler-types.ts" />
+    <None Include="ts\interview\slot-filler-ui.ts" />
+    <None Include="ts\interview\tsconfig.test.json" />
+    <None Include="VIGILANT\ts\interview\goal-tree-replanner.ts" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="VIGILANT.rc" />
+    <ResourceCompile Include="resources\VIGILANT.rc" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
@@ -145,7 +180,7 @@
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)src;$(ProjectDir)vendor\sqlite;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)src;$(ProjectDir)vendor\sqlite;$(ProjectDir)resources;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -161,7 +196,7 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)src;$(ProjectDir)vendor\sqlite;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)src;$(ProjectDir)vendor\sqlite;$(ProjectDir)resources;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -177,7 +212,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)src;$(ProjectDir)vendor\sqlite;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)src;$(ProjectDir)vendor\sqlite;$(ProjectDir)resources;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -195,7 +230,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)src;$(ProjectDir)vendor\sqlite;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)src;$(ProjectDir)vendor\sqlite;$(ProjectDir)resources;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>

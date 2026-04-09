@@ -1,4 +1,5 @@
 #include "Data/DatabaseManager.hpp"
+#include "AI/AutoTickerTickEngine.hpp"
 #include "Utils/PerfCounters.hpp"
 #include <iostream>
 
@@ -23,6 +24,9 @@ bool DatabaseManager::init() {
     sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", NULL, 0, nullptr);
     sqlite3_exec(db, "PRAGMA cache_size=-8000;", NULL, 0, nullptr);  // 8MB cache
     sqlite3_exec(db, "PRAGMA temp_store=MEMORY;", NULL, 0, nullptr);
+
+    // --- Busy timeout: wait up to 5s if another thread holds a lock ---
+    sqlite3_busy_timeout(db, 5000);
 
     // 1. Activities Tablosu (Ham Loglar)
     const char* sqlActivities =
@@ -89,7 +93,55 @@ bool DatabaseManager::init() {
 
     sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_activities_date ON Activities(DATE(TIMESTAMP));", NULL, 0, &zErrMsg);
 
-    // 6. Seed Data (Varsayılan Bilgiler)
+    // 6. InterviewSessions Tablosu
+    const char* sqlInterviewSessions =
+        "CREATE TABLE IF NOT EXISTS InterviewSessions ("
+        "SESSION_ID TEXT PRIMARY KEY,"
+        "RESULT_JSON TEXT NOT NULL,"              // full deterministic JSON document
+        "ENDED_BY TEXT NOT NULL DEFAULT '',"       // 'cta' | 'limit' | 'complete'
+        "QUESTION_COUNT INTEGER DEFAULT 0,"
+        "MAX_QUESTIONS INTEGER DEFAULT 3,"
+        "FINALIZED INTEGER DEFAULT 0,"
+        "CREATED_AT DATETIME DEFAULT CURRENT_TIMESTAMP,"
+        "FINALIZED_AT DATETIME);";
+    sqlite3_exec(db, sqlInterviewSessions, NULL, 0, &zErrMsg);
+
+    // 7. InterviewMessages Tablosu (normalized transcript)
+    const char* sqlInterviewMessages =
+        "CREATE TABLE IF NOT EXISTS InterviewMessages ("
+        "ID INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "SESSION_ID TEXT NOT NULL,"
+        "MESSAGE_ID TEXT NOT NULL,"
+        "ROLE TEXT NOT NULL,"                     // 'user' | 'ai' | 'system'
+        "TEXT_CONTENT TEXT NOT NULL,"
+        "ISO_TS TEXT NOT NULL,"
+        "SEQ INTEGER NOT NULL,"                   // ordering within session
+        "FOREIGN KEY (SESSION_ID) REFERENCES InterviewSessions(SESSION_ID));";
+    sqlite3_exec(db, sqlInterviewMessages, NULL, 0, &zErrMsg);
+
+    sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_interview_msg_session ON InterviewMessages(SESSION_ID, SEQ);", NULL, 0, &zErrMsg);
+
+    // 8. AutoTicks Tablosu (idempotent tick audit log)
+    const char* sqlAutoTicks =
+        "CREATE TABLE IF NOT EXISTS AutoTicks ("
+        "JOURNAL_ENTRY_ID TEXT NOT NULL,"
+        "MICRO_TASK_ID TEXT NOT NULL,"
+        "INTERVIEW_SESSION_ID TEXT NOT NULL,"
+        "VERDICT TEXT NOT NULL DEFAULT 'pass',"
+        "CONFIDENCE REAL DEFAULT 0.0,"
+        "COMMITTED_AT TEXT NOT NULL,"
+        "MODEL_VERSION TEXT DEFAULT '',"
+        "PRIMARY KEY (JOURNAL_ENTRY_ID, MICRO_TASK_ID));";
+    sqlite3_exec(db, sqlAutoTicks, NULL, 0, &zErrMsg);
+
+    sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_auto_ticks_session "
+                     "ON AutoTicks(INTERVIEW_SESSION_ID, MICRO_TASK_ID);",
+                 NULL, 0, &zErrMsg);
+    sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_auto_ticks_journal "
+                     "ON AutoTicks(JOURNAL_ENTRY_ID);",
+                 NULL, 0, &zErrMsg);
+
+    // 9. Seed Data (Varsayılan Bilgiler)
     const char* seedSql = "INSERT OR IGNORE INTO KnowledgeBase (PROCESS, TITLE_KEYWORD, CATEGORY, SCORE, SOURCE) VALUES "
         "('devenv.exe', '*', 'Yazilim', 10, 'seed'),"
         "('Code.exe', '*', 'Yazilim', 10, 'seed'),"
@@ -675,7 +727,7 @@ bool DatabaseManager::clearAllData() {
     if (m_stmtUpdateDuration) { sqlite3_finalize(m_stmtUpdateDuration); m_stmtUpdateDuration = nullptr; }
 
     bool ok = true;
-    const char* tables[] = { "Activities", "KnowledgeBase", "CategoryOverrides", "OverrideAuditLog", "DailySummary" };
+    const char* tables[] = { "Activities", "KnowledgeBase", "CategoryOverrides", "OverrideAuditLog", "DailySummary", "InterviewMessages", "InterviewSessions", "AutoTicks" };
     for (const char* table : tables) {
         std::string sql = "DELETE FROM " + std::string(table) + ";";
         char* errMsg = nullptr;
@@ -1042,4 +1094,285 @@ nlohmann::json DatabaseManager::getAvailableDates() {
         sqlite3_finalize(stmt);
     }
     return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Interview Result Persistence
+// ═══════════════════════════════════════════════════════════════════════
+
+bool DatabaseManager::saveInterviewResult(const std::string& sessionId,
+                                          const std::string& resultJson,
+                                          const std::string& endedBy,
+                                          int questionCount,
+                                          int maxQuestions) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    sqlite3_stmt* stmt;
+
+    // INSERT OR REPLACE — double-finalize idempotent (overwrites with same data)
+    const char* sql =
+        "INSERT INTO InterviewSessions (SESSION_ID, RESULT_JSON, ENDED_BY, QUESTION_COUNT, MAX_QUESTIONS, FINALIZED, FINALIZED_AT) "
+        "VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(SESSION_ID) DO UPDATE SET "
+        "RESULT_JSON=excluded.RESULT_JSON, ENDED_BY=excluded.ENDED_BY, "
+        "QUESTION_COUNT=excluded.QUESTION_COUNT, FINALIZED=1, FINALIZED_AT=CURRENT_TIMESTAMP;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return false;
+
+    sqlite3_bind_text(stmt, 1, sessionId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, resultJson.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, endedBy.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 4, questionCount);
+    sqlite3_bind_int(stmt, 5, maxQuestions);
+
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+
+    if (ok)
+        OutputDebugStringA(("[DB] Interview result saved: " + sessionId + "\n").c_str());
+    return ok;
+}
+
+bool DatabaseManager::saveInterviewMessages(const std::string& sessionId,
+                                            const nlohmann::json& transcriptArray) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+
+    if (!transcriptArray.is_array()) return false;
+
+    // Delete existing messages for this session (idempotent re-save)
+    {
+        sqlite3_stmt* del;
+        const char* sqlDel = "DELETE FROM InterviewMessages WHERE SESSION_ID = ?;";
+        if (sqlite3_prepare_v2(db, sqlDel, -1, &del, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(del, 1, sessionId.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_step(del);
+            sqlite3_finalize(del);
+        }
+    }
+
+    // Use SAVEPOINT instead of BEGIN IMMEDIATE to avoid conflict with
+    // BackgroundWorker's open transaction on the same connection.
+    sqlite3_exec(db, "SAVEPOINT sp_interview_msgs;", NULL, 0, nullptr);
+
+    sqlite3_stmt* stmt;
+    const char* sql =
+        "INSERT INTO InterviewMessages (SESSION_ID, MESSAGE_ID, ROLE, TEXT_CONTENT, ISO_TS, SEQ) "
+        "VALUES (?, ?, ?, ?, ?, ?);";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        sqlite3_exec(db, "ROLLBACK TO sp_interview_msgs;", NULL, 0, nullptr);
+        sqlite3_exec(db, "RELEASE sp_interview_msgs;", NULL, 0, nullptr);
+        return false;
+    }
+
+    int seq = 0;
+    bool allOk = true;
+    for (const auto& m : transcriptArray) {
+        sqlite3_reset(stmt);
+        sqlite3_clear_bindings(stmt);
+
+        std::string msgId   = m.value("message_id", "");
+        std::string role    = m.value("role", "");
+        std::string text    = m.value("text", "");
+        std::string iso_ts  = m.value("iso_ts", "");
+
+        sqlite3_bind_text(stmt, 1, sessionId.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, msgId.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, role.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 4, text.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 5, iso_ts.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 6, seq++);
+
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            allOk = false;
+            break;
+        }
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (allOk) {
+        sqlite3_exec(db, "RELEASE sp_interview_msgs;", NULL, 0, nullptr);
+    } else {
+        sqlite3_exec(db, "ROLLBACK TO sp_interview_msgs;", NULL, 0, nullptr);
+        sqlite3_exec(db, "RELEASE sp_interview_msgs;", NULL, 0, nullptr);
+    }
+
+    OutputDebugStringA(("[DB] Interview messages saved: " + sessionId + " (" + std::to_string(seq) + " messages)\n").c_str());
+    return true;
+}
+
+nlohmann::json DatabaseManager::getInterviewResult(const std::string& sessionId) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    sqlite3_stmt* stmt;
+    const char* sql = "SELECT RESULT_JSON FROM InterviewSessions WHERE SESSION_ID = ?;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, sessionId.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* raw = (const char*)sqlite3_column_text(stmt, 0);
+            sqlite3_finalize(stmt);
+            if (raw) {
+                auto parsed = nlohmann::json::parse(raw, nullptr, false);
+                if (!parsed.is_discarded()) return parsed;
+            }
+        } else {
+            sqlite3_finalize(stmt);
+        }
+    }
+    return nlohmann::json();
+}
+
+nlohmann::json DatabaseManager::getRecentInterviewSessions(int limit) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    nlohmann::json result = nlohmann::json::array();
+    sqlite3_stmt* stmt;
+    const char* sql =
+        "SELECT SESSION_ID, ENDED_BY, QUESTION_COUNT, MAX_QUESTIONS, FINALIZED, "
+        "CREATED_AT, FINALIZED_AT FROM InterviewSessions "
+        "ORDER BY CREATED_AT DESC LIMIT ?;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, limit);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            nlohmann::json row;
+            row["session_id"]     = (const char*)sqlite3_column_text(stmt, 0);
+            row["ended_by"]       = (const char*)sqlite3_column_text(stmt, 1);
+            row["question_count"] = sqlite3_column_int(stmt, 2);
+            row["max_questions"]  = sqlite3_column_int(stmt, 3);
+            row["finalized"]      = sqlite3_column_int(stmt, 4) != 0;
+            const char* ca = (const char*)sqlite3_column_text(stmt, 5);
+            const char* fa = (const char*)sqlite3_column_text(stmt, 6);
+            row["created_at"]     = ca ? ca : "";
+            row["finalized_at"]   = fa ? fa : "";
+            result.push_back(row);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Auto-Ticker Audit Log — idempotent tick tracking
+// ═══════════════════════════════════════════════════════════════════════
+
+bool DatabaseManager::insertAutoTick(const std::string& journalEntryId,
+                                     const std::string& microTaskId,
+                                     const std::string& interviewSessionId,
+                                     const std::string& verdict,
+                                     double confidence,
+                                     const std::string& ts,
+                                     const std::string& modelVersion) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    sqlite3_stmt* stmt;
+    const char* sql =
+        "INSERT OR IGNORE INTO AutoTicks "
+        "(JOURNAL_ENTRY_ID, MICRO_TASK_ID, INTERVIEW_SESSION_ID, VERDICT, "
+        "CONFIDENCE, COMMITTED_AT, MODEL_VERSION) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?);";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+        return false;
+
+    sqlite3_bind_text(stmt, 1, journalEntryId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, microTaskId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, interviewSessionId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, verdict.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(stmt, 5, confidence);
+    sqlite3_bind_text(stmt, 6, ts.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 7, modelVersion.c_str(), -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    int changes = sqlite3_changes(db);
+    sqlite3_finalize(stmt);
+
+    // INSERT OR IGNORE returns SQLITE_DONE even for duplicates;
+    // check sqlite3_changes to distinguish insert vs ignored-duplicate
+    return rc == SQLITE_DONE && changes > 0;
+}
+
+bool DatabaseManager::hasAutoTick(const std::string& journalEntryId,
+                                  const std::string& microTaskId) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    sqlite3_stmt* stmt;
+    const char* sql =
+        "SELECT 1 FROM AutoTicks "
+        "WHERE JOURNAL_ENTRY_ID = ? AND MICRO_TASK_ID = ? LIMIT 1;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+        return false;
+
+    sqlite3_bind_text(stmt, 1, journalEntryId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, microTaskId.c_str(), -1, SQLITE_TRANSIENT);
+
+    bool exists = (sqlite3_step(stmt) == SQLITE_ROW);
+    sqlite3_finalize(stmt);
+    return exists;
+}
+
+std::vector<TickRecord> DatabaseManager::getAutoTickHistory(
+    const std::string& interviewSessionId,
+    const std::string& microTaskId) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    std::vector<TickRecord> records;
+    sqlite3_stmt* stmt;
+    const char* sql =
+        "SELECT JOURNAL_ENTRY_ID, MICRO_TASK_ID, INTERVIEW_SESSION_ID, "
+        "VERDICT, CONFIDENCE, COMMITTED_AT, MODEL_VERSION "
+        "FROM AutoTicks "
+        "WHERE INTERVIEW_SESSION_ID = ? AND MICRO_TASK_ID = ? "
+        "ORDER BY COMMITTED_AT DESC;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+        return records;
+
+    sqlite3_bind_text(stmt, 1, interviewSessionId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, microTaskId.c_str(), -1, SQLITE_TRANSIENT);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        TickRecord r;
+        r.journalEntryId     = (const char*)sqlite3_column_text(stmt, 0);
+        r.microTaskId        = (const char*)sqlite3_column_text(stmt, 1);
+        r.interviewSessionId = (const char*)sqlite3_column_text(stmt, 2);
+        r.verdict            = (const char*)sqlite3_column_text(stmt, 3);
+        r.confidence         = sqlite3_column_double(stmt, 4);
+        r.committedAt        = (const char*)sqlite3_column_text(stmt, 5);
+        const char* mv = (const char*)sqlite3_column_text(stmt, 6);
+        r.modelVersion       = mv ? mv : "";
+        records.push_back(std::move(r));
+    }
+    sqlite3_finalize(stmt);
+    return records;
+}
+
+std::vector<TickRecord> DatabaseManager::getAutoTicksByJournal(
+    const std::string& journalEntryId) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    std::vector<TickRecord> records;
+    sqlite3_stmt* stmt;
+    const char* sql =
+        "SELECT JOURNAL_ENTRY_ID, MICRO_TASK_ID, INTERVIEW_SESSION_ID, "
+        "VERDICT, CONFIDENCE, COMMITTED_AT, MODEL_VERSION "
+        "FROM AutoTicks "
+        "WHERE JOURNAL_ENTRY_ID = ? "
+        "ORDER BY COMMITTED_AT DESC;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+        return records;
+
+    sqlite3_bind_text(stmt, 1, journalEntryId.c_str(), -1, SQLITE_TRANSIENT);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        TickRecord r;
+        r.journalEntryId     = (const char*)sqlite3_column_text(stmt, 0);
+        r.microTaskId        = (const char*)sqlite3_column_text(stmt, 1);
+        r.interviewSessionId = (const char*)sqlite3_column_text(stmt, 2);
+        r.verdict            = (const char*)sqlite3_column_text(stmt, 3);
+        r.confidence         = sqlite3_column_double(stmt, 4);
+        r.committedAt        = (const char*)sqlite3_column_text(stmt, 5);
+        const char* mv = (const char*)sqlite3_column_text(stmt, 6);
+        r.modelVersion       = mv ? mv : "";
+        records.push_back(std::move(r));
+    }
+    sqlite3_finalize(stmt);
+    return records;
 }

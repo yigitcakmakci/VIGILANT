@@ -1,8 +1,15 @@
 #include "UI/WebViewManager.hpp"
 #include <shlobj.h>
+#include "WebView2EnvironmentOptions.h"
 #include "Data/DatabaseManager.hpp"
 #include "AI/GeminiService.hpp"
+#include "AI/InterviewHandler.hpp"
+#include "AI/AutoTickerMatcher.hpp"
+#include "AI/AutoTickerVerifier.hpp"
+#include "AI/AutoTickerTickEngine.hpp"
+#include "AI/AutoTickerVersionGuard.hpp"
 #include "Utils/StartupManager.hpp"
+#include "Core/WindowTracker.hpp"
 #include "Utils/json.hpp"
 #include "Utils/ResourceLoader.hpp"
 #include "resource.h"
@@ -10,6 +17,12 @@
 
 extern DatabaseManager g_Vault;
 extern GeminiService g_Gemini;
+
+// ── Auto-Ticker version guard (tracks GoalTree version per session) ──
+static AutoTickerVersionGuard g_VersionGuard;
+
+// ── Socratic Interview handler (singleton, lazily uses g_Gemini + g_Vault) ──
+static InterviewHandler g_InterviewHandler(&g_Gemini, &g_Vault);
 
 // --- Narrative Input Builder ---
 // Mevcut WindowTracker ve veritabani verilerini kullanarak
@@ -113,10 +126,14 @@ bool WebViewManager::Initialize() {
     // Store a pointer to this for use in lambda
     WebViewManager* pThis = this;
 
+    // Allow Web Audio API autoplay without user gesture (needed for ambiance sound)
+    auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+    options->put_AdditionalBrowserArguments(L"--autoplay-policy=no-user-gesture-required");
+
     HRESULT res = CreateCoreWebView2EnvironmentWithOptions(
         nullptr, 
         userDataPath,
-        nullptr,
+        options.Get(),
         Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
             [pThis](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
 
@@ -238,6 +255,7 @@ bool WebViewManager::Initialize() {
                                             { L"mood-engine.js",         IDR_JS_MOOD_ENGINE,         L"application/javascript; charset=utf-8" },
                                             { L"timer-service.js",       IDR_JS_TIMER_SERVICE,       L"application/javascript; charset=utf-8" },
                                             { L"gemini-client.js",       IDR_JS_GEMINI_CLIENT,       L"application/javascript; charset=utf-8" },
+                                            { L"interview-widget.js",    IDR_JS_INTERVIEW_WIDGET,    L"application/javascript; charset=utf-8" },
                                         };
 
                                         for (const auto& m : kMap) {
@@ -375,6 +393,20 @@ void WebViewManager::SetupMessageHandler() {
 
                                     if (webViewCopy) {
                                         webViewCopy->PostWebMessageAsJson(wresponse.c_str());
+                                    }
+
+                                    // Token Odometer: AI cagrisindan sonra token kullanim event'i gonder
+                                    if (g_Gemini.hasPendingTokenUpdate()) {
+                                        std::string tokenEvt = g_Gemini.consumeTokenUsageEventJson();
+                                        if (!tokenEvt.empty()) {
+                                            int tokenSize = MultiByteToWideChar(CP_UTF8, 0, tokenEvt.c_str(), (int)tokenEvt.length(), NULL, 0);
+                                            if (tokenSize > 0) {
+                                                std::wstring wTokenEvt(tokenSize, 0);
+                                                MultiByteToWideChar(CP_UTF8, 0, tokenEvt.c_str(), (int)tokenEvt.length(), &wTokenEvt[0], tokenSize);
+                                                webViewCopy->PostWebMessageAsJson(wTokenEvt.c_str());
+                                                OutputDebugStringW(L"[WebViewManager] AiTokenUsageUpdated event gonderildi\n");
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -779,6 +811,25 @@ std::string WebViewManager::HandleMessage(const std::string& message) {
             if (!requestId.empty()) resp["requestId"] = requestId;
             response = resp.dump();
         }
+        // ── Tracking Pause / Resume / Status ──
+        else if (message.find("pauseTracking") != std::string::npos) {
+            WindowTracker::PauseTracking();
+            response = "{\"status\":\"paused\"";
+            if (!requestId.empty()) response += ",\"requestId\":\"" + requestId + "\"";
+            response += "}";
+        }
+        else if (message.find("resumeTracking") != std::string::npos) {
+            WindowTracker::ResumeTracking();
+            response = "{\"status\":\"active\"";
+            if (!requestId.empty()) response += ",\"requestId\":\"" + requestId + "\"";
+            response += "}";
+        }
+        else if (message.find("getTrackingStatus") != std::string::npos) {
+            bool paused = WindowTracker::IsPaused();
+            response = "{\"paused\":" + std::string(paused ? "true" : "false");
+            if (!requestId.empty()) response += ",\"requestId\":\"" + requestId + "\"";
+            response += "}";
+        }
         else if (message.find("setAutostart") != std::string::npos) {
             bool enable = (message.find("\"enabled\":true") != std::string::npos ||
                            message.find("\"enabled\": true") != std::string::npos);
@@ -793,6 +844,625 @@ std::string WebViewManager::HandleMessage(const std::string& message) {
             response = "{\"status\":\"" + std::string(ok ? "success" : "error") + "\"";
             if (!requestId.empty()) response += ",\"requestId\":" + requestId;
             response += "}";
+        }
+        // ── Socratic Interview: InterviewStartRequested ──
+        else if (message.find("InterviewStartRequested") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] Interview start istegi alindi\n");
+            response = g_InterviewHandler.HandleInterviewStart(requestId, 3);
+        }
+        // ── Socratic Interview: UserMessageSubmitted ──
+        else if (message.find("UserMessageSubmitted") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] Interview user message alindi\n");
+            // Extract sessionId, text, messageId from payload
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string sid, text, msgId;
+            if (!j.is_discarded()) {
+                if (j.contains("sessionId")) sid = j["sessionId"].get<std::string>();
+                if (j.contains("payload")) {
+                    auto& p = j["payload"];
+                    if (p.contains("text")) text = p["text"].get<std::string>();
+                    if (p.contains("messageId")) msgId = p["messageId"].get<std::string>();
+                }
+            }
+            response = g_InterviewHandler.HandleUserMessage(requestId, sid, text, msgId);
+        }
+        // ── Socratic Interview: FinalizeInterviewRequested ──
+        else if (message.find("FinalizeInterviewRequested") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] Interview finalize istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string sid, endedBy;
+            if (!j.is_discarded()) {
+                if (j.contains("sessionId")) sid = j["sessionId"].get<std::string>();
+                if (j.contains("payload") && j["payload"].contains("endedBy"))
+                    endedBy = j["payload"]["endedBy"].get<std::string>();
+            }
+            response = g_InterviewHandler.HandleFinalizeInterview(requestId, sid, endedBy);
+        }
+        // ── Socratic Interview: GenerateGoalTree ──
+        else if (message.find("GenerateGoalTree") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] GenerateGoalTree istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string interviewSessionId;
+            if (!j.is_discarded() && j.contains("payload") && j["payload"].contains("interviewSessionId"))
+                interviewSessionId = j["payload"]["interviewSessionId"].get<std::string>();
+            response = g_InterviewHandler.HandleGenerateGoalTree(requestId, interviewSessionId);
+        }
+        // ── GoalTree: TickMicroTask ──
+        else if (message.find("TickMicroTask") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] TickMicroTask istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string interviewSessionId, microTaskId;
+            nlohmann::json evidenceJson = nlohmann::json::object();
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                if (p.contains("interviewSessionId"))
+                    interviewSessionId = p["interviewSessionId"].get<std::string>();
+                if (p.contains("microTaskId"))
+                    microTaskId = p["microTaskId"].get<std::string>();
+                if (p.contains("evidence") && p["evidence"].is_object())
+                    evidenceJson = p["evidence"];
+            }
+            response = g_InterviewHandler.HandleTickMicroTask(
+                requestId, interviewSessionId, microTaskId, evidenceJson);
+        }
+        // ── SkillTree: MicroTaskStatusChangeRequested ──
+        else if (message.find("MicroTaskStatusChangeRequested") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] MicroTaskStatusChangeRequested istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string interviewSessionId, microTaskId, newStatus;
+            nlohmann::json evidenceJson = nlohmann::json::object();
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                if (p.contains("interviewSessionId"))
+                    interviewSessionId = p["interviewSessionId"].get<std::string>();
+                if (p.contains("microTaskId"))
+                    microTaskId = p["microTaskId"].get<std::string>();
+                if (p.contains("newStatus"))
+                    newStatus = p["newStatus"].get<std::string>();
+                if (p.contains("evidence") && p["evidence"].is_object())
+                    evidenceJson = p["evidence"];
+            }
+            response = g_InterviewHandler.HandleMicroTaskStatusChange(
+                requestId, interviewSessionId, microTaskId, newStatus, evidenceJson);
+        }
+        // ── GoalTree: ReplanRequested ──
+        else if (message.find("ReplanRequested") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] ReplanRequested istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string interviewSessionId, reason;
+            nlohmann::json changedSlots = nlohmann::json::object();
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                if (p.contains("interviewSessionId"))
+                    interviewSessionId = p["interviewSessionId"].get<std::string>();
+                if (p.contains("reason"))
+                    reason = p["reason"].get<std::string>();
+                if (p.contains("changedSlots") && p["changedSlots"].is_object())
+                    changedSlots = p["changedSlots"];
+            }
+            response = g_InterviewHandler.HandleReplanGoalTree(
+                requestId, interviewSessionId, reason, changedSlots);
+
+            // ── Version guard: detect staleness after replan ──
+            auto replanResp = nlohmann::json::parse(response, nullptr, false);
+            if (!replanResp.is_discarded()
+                && replanResp.value("type", "") == "ReplanCompleted"
+                && replanResp.contains("payload")
+                && replanResp["payload"].contains("goalTree")) {
+
+                auto& newTree = replanResp["payload"]["goalTree"];
+                InvalidationResult inv = g_VersionGuard.RefreshTree(
+                    interviewSessionId, newTree);
+
+                // Inject version_id into the ReplanCompleted response
+                replanResp["payload"]["goalTreeVersionId"] =
+                    newTree.value("version_id", "");
+                response = replanResp.dump();
+
+                // If any candidates were invalidated, send additional events
+                if (inv.treeChanged && !inv.invalidated.empty()) {
+                    nlohmann::json invArr = nlohmann::json::array();
+                    for (const auto& s : inv.invalidated) {
+                        invArr.push_back({
+                            {"microTaskId",  s.microTaskId},
+                            {"oldVersionId", s.oldVersionId},
+                            {"newVersionId", s.newVersionId},
+                            {"reason",       s.reason}
+                        });
+                    }
+
+                    nlohmann::json candInv;
+                    candInv["type"]      = "CandidatesInvalidated";
+                    candInv["sessionId"] = interviewSessionId;
+                    candInv["requestId"] = requestId;
+                    candInv["ts"]        = "";
+                    candInv["payload"]   = {
+                        {"interviewSessionId", interviewSessionId},
+                        {"oldVersionId",       inv.oldVersionId},
+                        {"newVersionId",       inv.newVersionId},
+                        {"invalidated",        invArr},
+                        {"survivingCount",     inv.survivingCount}
+                    };
+
+                    // Append as a second message: pipe-delimited
+                    response += "\n" + candInv.dump();
+                }
+
+                // Always emit GoalTreeVersionUpdated
+                if (inv.treeChanged) {
+                    nlohmann::json verUp;
+                    verUp["type"]      = "GoalTreeVersionUpdated";
+                    verUp["sessionId"] = interviewSessionId;
+                    verUp["requestId"] = requestId;
+                    verUp["ts"]        = "";
+                    verUp["payload"]   = {
+                        {"interviewSessionId", interviewSessionId},
+                        {"versionId",          inv.newVersionId},
+                        {"parentVersionId",    inv.oldVersionId},
+                        {"openMicroCount",     static_cast<int>(
+                            g_VersionGuard.GetPendingCandidates(interviewSessionId).size())}
+                    };
+                    response += "\n" + verUp.dump();
+                }
+            }
+        }
+        // ── AutoTickerMatcher: JournalSubmitted ──
+        else if (message.find("JournalSubmitted") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] JournalSubmitted istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string interviewSessionId, journalText;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                if (p.contains("interviewSessionId"))
+                    interviewSessionId = p["interviewSessionId"].get<std::string>();
+                if (p.contains("journalText"))
+                    journalText = p["journalText"].get<std::string>();
+            }
+
+            // Load the persisted interview result (contains goalTree)
+            nlohmann::json storedResult;
+            if (!interviewSessionId.empty()) {
+                storedResult = g_Vault.getInterviewResult(interviewSessionId);
+            }
+
+            GoalTree goalTree;
+            int evaluatedCount = 0;
+            nlohmann::json candidatesArray = nlohmann::json::array();
+
+            std::string treeVersionId;
+
+            if (!storedResult.is_null() && storedResult.contains("goalTree")
+                && storedResult["goalTree"].is_object()) {
+                auto& treeJ = storedResult["goalTree"];
+                treeVersionId = treeJ.value("version_id", "");
+                // Parse GoalTree from JSON
+                if (treeJ.contains("majors") && treeJ["majors"].is_array()) {
+                    for (const auto& maj : treeJ["majors"]) {
+                        MajorGoal mg;
+                        mg.id = maj.value("id", "");
+                        mg.title = maj.value("title", "");
+                        mg.description = maj.value("description", "");
+                        if (maj.contains("minors") && maj["minors"].is_array()) {
+                            for (const auto& min : maj["minors"]) {
+                                MinorGoal mig;
+                                mig.id = min.value("id", "");
+                                mig.title = min.value("title", "");
+                                mig.description = min.value("description", "");
+                                if (min.contains("micros") && min["micros"].is_array()) {
+                                    for (const auto& mic : min["micros"]) {
+                                        MicroTask mt;
+                                        mt.id = mic.value("id", "");
+                                        mt.title = mic.value("title", "");
+                                        mt.description = mic.value("description", "");
+                                        mt.acceptance_criteria = mic.value("acceptance_criteria", "");
+                                        mt.evidence_type = mic.value("evidence_type", "text");
+                                        mt.status = mic.value("status", "open");
+                                        if (mt.status == "open") evaluatedCount++;
+                                        mig.micros.push_back(std::move(mt));
+                                    }
+                                }
+                                mg.minors.push_back(std::move(mig));
+                            }
+                        }
+                        goalTree.majors.push_back(std::move(mg));
+                    }
+                }
+
+                // Run the matcher
+                AutoTickerMatcher matcher(&g_Gemini);
+                auto candidates = matcher.Match(journalText, goalTree);
+
+                // Register candidates with the version guard
+                std::vector<PendingCandidate> pendingCands;
+                for (const auto& c : candidates) {
+                    nlohmann::json cj;
+                    cj["microTaskId"] = c.microTaskId;
+                    cj["score"] = c.score;
+                    cj["rationale"] = c.rationale;
+                    nlohmann::json spans = nlohmann::json::array();
+                    for (const auto& s : c.matchedSpans) {
+                        spans.push_back({
+                            {"start", s.start},
+                            {"length", s.length},
+                            {"text", s.text}
+                        });
+                    }
+                    cj["matchedSpans"] = spans;
+                    candidatesArray.push_back(cj);
+
+                    PendingCandidate pc;
+                    pc.microTaskId       = c.microTaskId;
+                    pc.goalTreeVersionId = treeVersionId;
+                    pc.score             = c.score;
+                    pendingCands.push_back(std::move(pc));
+                }
+
+                if (!pendingCands.empty()) {
+                    g_VersionGuard.RegisterCandidates(
+                        interviewSessionId, treeVersionId, pendingCands);
+                }
+            }
+
+            // Build MatchCandidatesProduced response
+            nlohmann::json resp;
+            resp["type"] = "MatchCandidatesProduced";
+            resp["sessionId"] = interviewSessionId;
+            resp["requestId"] = requestId;
+            resp["ts"] = ""; // will be filled by WebView
+            resp["payload"] = {
+                {"interviewSessionId", interviewSessionId},
+                {"candidates", candidatesArray},
+                {"evaluatedCount", evaluatedCount},
+                {"goalTreeVersionId", treeVersionId}
+            };
+            response = resp.dump();
+        }
+        // ── AutoTickerVerifier: VerifyCandidateRequested ──
+        else if (message.find("VerifyCandidateRequested") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] VerifyCandidateRequested istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string interviewSessionId, microTaskId, journalText;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                if (p.contains("interviewSessionId"))
+                    interviewSessionId = p["interviewSessionId"].get<std::string>();
+                if (p.contains("microTaskId"))
+                    microTaskId = p["microTaskId"].get<std::string>();
+                if (p.contains("journalText"))
+                    journalText = p["journalText"].get<std::string>();
+            }
+
+            // Default fail result
+            nlohmann::json resultJson;
+            resultJson["microTaskId"] = microTaskId;
+            resultJson["verdict"] = "fail";
+            resultJson["confidence"] = 0.0;
+            resultJson["evidenceSpans"] = nlohmann::json::array();
+            resultJson["explanation"] = "Verification could not be performed.";
+            bool highConfidence = false;
+
+            // Load stored interview result and find the specific MicroTask
+            if (!interviewSessionId.empty() && !microTaskId.empty()) {
+                nlohmann::json storedResult = g_Vault.getInterviewResult(interviewSessionId);
+                if (!storedResult.is_null() && storedResult.contains("goalTree")
+                    && storedResult["goalTree"].is_object()) {
+                    auto& treeJ = storedResult["goalTree"];
+                    std::string mtTitle, mtCriteria, mtEvidenceType;
+                    bool found = false;
+
+                    // Search for the MicroTask by id
+                    if (treeJ.contains("majors") && treeJ["majors"].is_array()) {
+                        for (const auto& maj : treeJ["majors"]) {
+                            if (found) break;
+                            if (maj.contains("minors") && maj["minors"].is_array()) {
+                                for (const auto& min : maj["minors"]) {
+                                    if (found) break;
+                                    if (min.contains("micros") && min["micros"].is_array()) {
+                                        for (const auto& mic : min["micros"]) {
+                                            if (mic.value("id", "") == microTaskId) {
+                                                mtTitle = mic.value("title", "");
+                                                mtCriteria = mic.value("acceptance_criteria", "");
+                                                mtEvidenceType = mic.value("evidence_type", "text");
+                                                found = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (found && !mtCriteria.empty()) {
+                        AutoTickerVerifier verifier(&g_Gemini);
+                        VerificationResult vr = verifier.Verify(
+                            journalText, microTaskId, mtTitle, mtCriteria, mtEvidenceType);
+
+                        resultJson["microTaskId"] = vr.microTaskId;
+                        resultJson["verdict"] = vr.verdict;
+                        resultJson["confidence"] = vr.confidence;
+                        resultJson["explanation"] = vr.explanation;
+
+                        nlohmann::json spans = nlohmann::json::array();
+                        for (const auto& s : vr.evidenceSpans) {
+                            spans.push_back({
+                                {"start", s.start},
+                                {"length", s.length},
+                                {"text", s.text}
+                            });
+                        }
+                        resultJson["evidenceSpans"] = spans;
+                        highConfidence = vr.isHighConfidencePass();
+                    } else if (!found) {
+                        resultJson["explanation"] = "MicroTask not found in goal tree.";
+                    } else {
+                        resultJson["explanation"] = "Acceptance criteria is empty.";
+                    }
+                }
+            }
+
+            // Build CandidateVerified response
+            nlohmann::json resp;
+            resp["type"] = "CandidateVerified";
+            resp["sessionId"] = interviewSessionId;
+            resp["requestId"] = requestId;
+            resp["ts"] = "";
+            resp["payload"] = {
+                {"interviewSessionId", interviewSessionId},
+                {"result", resultJson},
+                {"highConfidence", highConfidence}
+            };
+            response = resp.dump();
+        }
+        // ── AutoTickerTickEngine: CommitTickRequested ──
+        else if (message.find("CommitTickRequested") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] CommitTickRequested istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string interviewSessionId, journalEntryId, microTaskId, verdict, explanation, modelVersion;
+            double confidence = 0.0;
+            nlohmann::json evidenceSpans = nlohmann::json::array();
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                if (p.contains("interviewSessionId"))
+                    interviewSessionId = p["interviewSessionId"].get<std::string>();
+                if (p.contains("journalEntryId"))
+                    journalEntryId = p["journalEntryId"].get<std::string>();
+                if (p.contains("microTaskId"))
+                    microTaskId = p["microTaskId"].get<std::string>();
+                if (p.contains("verdict"))
+                    verdict = p["verdict"].get<std::string>();
+                if (p.contains("confidence") && p["confidence"].is_number())
+                    confidence = p["confidence"].get<double>();
+                if (p.contains("evidenceSpans") && p["evidenceSpans"].is_array())
+                    evidenceSpans = p["evidenceSpans"];
+                if (p.contains("explanation"))
+                    explanation = p["explanation"].get<std::string>();
+                if (p.contains("modelVersion"))
+                    modelVersion = p["modelVersion"].get<std::string>();
+            }
+
+            AutoTickerTickEngine tickEngine(&g_Vault);
+            TickOutcome outcome = tickEngine.CommitTick(
+                interviewSessionId, journalEntryId, microTaskId,
+                verdict, confidence, evidenceSpans, explanation, modelVersion);
+
+            nlohmann::json resp;
+            resp["sessionId"] = interviewSessionId;
+            resp["requestId"] = requestId;
+            resp["ts"] = "";
+
+            if (outcome.committed) {
+                resp["type"] = "TickCommitted";
+                resp["payload"] = {
+                    {"interviewSessionId", interviewSessionId},
+                    {"microTaskId", microTaskId},
+                    {"journalEntryId", journalEntryId},
+                    {"committedAt", outcome.committedAt}
+                };
+                // Remove committed candidate from version guard
+                g_VersionGuard.RemoveCandidate(interviewSessionId, microTaskId);
+            } else {
+                resp["type"] = "TickRejected";
+                resp["payload"] = {
+                    {"interviewSessionId", interviewSessionId},
+                    {"microTaskId", microTaskId},
+                    {"journalEntryId", journalEntryId},
+                    {"rejectionReason", rejectionReasonToString(outcome.rejectionReason)},
+                    {"rejectionMessage", outcome.rejectionMessage}
+                };
+            }
+            response = resp.dump();
+        }
+        // ── AutoTickerTickEngine: GetTickHistoryRequested ──
+        else if (message.find("GetTickHistoryRequested") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] GetTickHistoryRequested istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string interviewSessionId, microTaskId;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                if (p.contains("interviewSessionId"))
+                    interviewSessionId = p["interviewSessionId"].get<std::string>();
+                if (p.contains("microTaskId"))
+                    microTaskId = p["microTaskId"].get<std::string>();
+            }
+
+            AutoTickerTickEngine tickEngine(&g_Vault);
+            auto records = tickEngine.GetTickHistory(interviewSessionId, microTaskId);
+
+            nlohmann::json recordsArr = nlohmann::json::array();
+            for (const auto& r : records) {
+                recordsArr.push_back({
+                    {"journalEntryId", r.journalEntryId},
+                    {"microTaskId", r.microTaskId},
+                    {"interviewSessionId", r.interviewSessionId},
+                    {"verdict", r.verdict},
+                    {"confidence", r.confidence},
+                    {"committedAt", r.committedAt},
+                    {"modelVersion", r.modelVersion}
+                });
+            }
+
+            nlohmann::json resp;
+            resp["type"] = "TickHistoryProduced";
+            resp["sessionId"] = interviewSessionId;
+            resp["requestId"] = requestId;
+            resp["ts"] = "";
+            resp["payload"] = {
+                {"interviewSessionId", interviewSessionId},
+                {"microTaskId", microTaskId},
+                {"records", recordsArr}
+            };
+            response = resp.dump();
+        }
+        // ── AutoTickerVersionGuard: RematchRequested ──
+        else if (message.find("RematchRequested") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] RematchRequested istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string interviewSessionId, journalText, goalTreeVersionId;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                if (p.contains("interviewSessionId"))
+                    interviewSessionId = p["interviewSessionId"].get<std::string>();
+                if (p.contains("journalText"))
+                    journalText = p["journalText"].get<std::string>();
+                if (p.contains("goalTreeVersionId"))
+                    goalTreeVersionId = p["goalTreeVersionId"].get<std::string>();
+            }
+
+            // Verify the requested version matches the current tracked version
+            std::string currentVer = g_VersionGuard.GetCurrentVersionId(interviewSessionId);
+            if (!goalTreeVersionId.empty() && !currentVer.empty()
+                && goalTreeVersionId != currentVer) {
+                nlohmann::json err;
+                err["type"]      = "Error";
+                err["sessionId"] = interviewSessionId;
+                err["requestId"] = requestId;
+                err["ts"]        = "";
+                err["payload"]   = {
+                    {"interviewSessionId", interviewSessionId},
+                    {"code",  "VERSION_MISMATCH"},
+                    {"error", "Requested version " + goalTreeVersionId
+                              + " does not match current " + currentVer}
+                };
+                response = err.dump();
+            } else {
+                // Load stored result, parse GoalTree, run matcher (same as JournalSubmitted)
+                nlohmann::json storedResult;
+                if (!interviewSessionId.empty()) {
+                    storedResult = g_Vault.getInterviewResult(interviewSessionId);
+                }
+
+                GoalTree goalTree;
+                int evaluatedCount = 0;
+                nlohmann::json candidatesArray = nlohmann::json::array();
+                std::string treeVersionId;
+
+                if (!storedResult.is_null() && storedResult.contains("goalTree")
+                    && storedResult["goalTree"].is_object()) {
+                    auto& treeJ = storedResult["goalTree"];
+                    treeVersionId = treeJ.value("version_id", "");
+
+                    if (treeJ.contains("majors") && treeJ["majors"].is_array()) {
+                        for (const auto& maj : treeJ["majors"]) {
+                            MajorGoal mg;
+                            mg.id = maj.value("id", "");
+                            mg.title = maj.value("title", "");
+                            mg.description = maj.value("description", "");
+                            if (maj.contains("minors") && maj["minors"].is_array()) {
+                                for (const auto& min : maj["minors"]) {
+                                    MinorGoal mig;
+                                    mig.id = min.value("id", "");
+                                    mig.title = min.value("title", "");
+                                    mig.description = min.value("description", "");
+                                    if (min.contains("micros") && min["micros"].is_array()) {
+                                        for (const auto& mic : min["micros"]) {
+                                            MicroTask mt;
+                                            mt.id = mic.value("id", "");
+                                            mt.title = mic.value("title", "");
+                                            mt.description = mic.value("description", "");
+                                            mt.acceptance_criteria = mic.value("acceptance_criteria", "");
+                                            mt.evidence_type = mic.value("evidence_type", "text");
+                                            mt.status = mic.value("status", "open");
+                                            if (mt.status == "open") evaluatedCount++;
+                                            mig.micros.push_back(std::move(mt));
+                                        }
+                                    }
+                                    mg.minors.push_back(std::move(mig));
+                                }
+                            }
+                            goalTree.majors.push_back(std::move(mg));
+                        }
+                    }
+
+                    AutoTickerMatcher matcher(&g_Gemini);
+                    auto candidates = matcher.Match(journalText, goalTree);
+
+                    std::vector<PendingCandidate> pendingCands;
+                    for (const auto& c : candidates) {
+                        nlohmann::json cj;
+                        cj["microTaskId"] = c.microTaskId;
+                        cj["score"] = c.score;
+                        cj["rationale"] = c.rationale;
+                        nlohmann::json spans = nlohmann::json::array();
+                        for (const auto& s : c.matchedSpans) {
+                            spans.push_back({
+                                {"start", s.start},
+                                {"length", s.length},
+                                {"text", s.text}
+                            });
+                        }
+                        cj["matchedSpans"] = spans;
+                        candidatesArray.push_back(cj);
+
+                        PendingCandidate pc;
+                        pc.microTaskId       = c.microTaskId;
+                        pc.goalTreeVersionId = treeVersionId;
+                        pc.score             = c.score;
+                        pendingCands.push_back(std::move(pc));
+                    }
+
+                    if (!pendingCands.empty()) {
+                        g_VersionGuard.RegisterCandidates(
+                            interviewSessionId, treeVersionId, pendingCands);
+                    }
+                }
+
+                nlohmann::json resp;
+                resp["type"] = "MatchCandidatesProduced";
+                resp["sessionId"] = interviewSessionId;
+                resp["requestId"] = requestId;
+                resp["ts"] = "";
+                resp["payload"] = {
+                    {"interviewSessionId", interviewSessionId},
+                    {"candidates", candidatesArray},
+                    {"evaluatedCount", evaluatedCount},
+                    {"goalTreeVersionId", treeVersionId}
+                };
+                response = resp.dump();
+            }
+        }
+        // ── SlotFiller: Start ──
+        else if (message.find("SlotFillerStart") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] SlotFiller start istegi alindi\n");
+            response = g_InterviewHandler.HandleSlotFillerStart(requestId);
+        }
+        // ── SlotFiller: Answer ──
+        else if (message.find("SlotFillerAnswer") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] SlotFiller answer alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string text;
+            if (!j.is_discarded() && j.contains("payload") && j["payload"].contains("text"))
+                text = j["payload"]["text"].get<std::string>();
+            response = g_InterviewHandler.HandleSlotFillerAnswer(requestId, text);
+        }
+        // ── SlotFiller: Finalize ──
+        else if (message.find("SlotFillerFinalize") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] SlotFiller finalize istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string endedBy = "cta";
+            if (!j.is_discarded() && j.contains("payload") && j["payload"].contains("endedBy"))
+                endedBy = j["payload"]["endedBy"].get<std::string>();
+            response = g_InterviewHandler.HandleSlotFillerFinalize(requestId, endedBy);
         }
     } catch (const std::exception& e) {
         response = "{\"error\":\"" + std::string(e.what()) + "\"";

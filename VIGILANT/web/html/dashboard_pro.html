@@ -44,6 +44,11 @@
                         _applyNarrativeUpdate(data);
                         // requestId icin fall-through (promise resolution)
                     }
+                    // Token Odometer: AI token kullanim event'i
+                    if (data && data.type === 'AiTokenUsageUpdated') {
+                        _updateTokenOdometer(data.payload);
+                        return;
+                    }
                     var rid = data && data.requestId != null ? String(data.requestId) : null;
                     if (rid && self._pending[rid]) {
                         self._pending[rid](data);
@@ -86,7 +91,10 @@
             getHistoricalData: function(date) { return this._request('getHistoricalData', {date: date}); },
             getDailyTrends: function(days) { return this._request('getDailyTrends', {days: days || 7}); },
             saveDailySummary: function() { return this._request('saveDailySummary'); },
-            getAvailableDates: function() { return this._request('getAvailableDates'); }
+            getAvailableDates: function() { return this._request('getAvailableDates'); },
+            pauseTracking: function() { return this._request('pauseTracking'); },
+            resumeTracking: function() { return this._request('resumeTracking'); },
+            getTrackingStatus: function() { return this._request('getTrackingStatus'); }
         };
     </script>
     <link rel="stylesheet" href="micro-interactions.css">
@@ -358,6 +366,73 @@
         .insight-icon svg { width: 14px; height: 14px; }
         .insight-text { font-size: 13px; color: rgba(255,255,255,.6); line-height: 1.6; }
 
+        /* Token Odometer */
+        .token-odometer {
+            padding: 14px 16px;
+            border-radius: 14px;
+            background: rgba(255,255,255,.04);
+            border: 1px solid rgba(255,255,255,.07);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+        }
+        .token-odometer-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        .token-odometer-label {
+            font-size: 11px;
+            font-weight: 500;
+            color: rgba(255,255,255,.45);
+            text-transform: uppercase;
+            letter-spacing: .06em;
+        }
+        .token-odometer-value {
+            font-family: 'Courier New', ui-monospace, SFMono-Regular, monospace;
+            font-size: 12px;
+            font-weight: 600;
+            color: rgba(255,255,255,.7);
+            letter-spacing: .02em;
+        }
+        .token-bar-track {
+            width: 100%;
+            height: 6px;
+            border-radius: 99px;
+            background: rgba(255,255,255,.06);
+            overflow: hidden;
+            position: relative;
+        }
+        .token-bar-fill {
+            height: 100%;
+            border-radius: 99px;
+            background: linear-gradient(90deg, #22d3ee, #34d399);
+            box-shadow: 0 0 10px rgba(52,211,153,.35);
+            transition: width 500ms cubic-bezier(.4,0,.2,1), background 500ms ease, box-shadow 500ms ease;
+            will-change: width;
+            min-width: 0;
+        }
+        .token-bar-fill.warning {
+            background: linear-gradient(90deg, #f59e0b, #ef4444);
+            box-shadow: 0 0 12px rgba(239,68,68,.4);
+        }
+        .token-odometer-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 8px;
+        }
+        .token-odometer-req {
+            font-size: 10px;
+            color: rgba(255,255,255,.3);
+        }
+        .token-odometer-pct {
+            font-family: 'Courier New', ui-monospace, SFMono-Regular, monospace;
+            font-size: 10px;
+            font-weight: 600;
+            color: rgba(255,255,255,.4);
+        }
+
         /* Activity List in Chart Area */
         #activityTimeline { display: flex; flex-direction: column; }
         .activity-list { overflow-y: auto; margin-top: 12px; max-height: 400px; }
@@ -588,6 +663,42 @@
         }
 
         /* ══════════════════════════════════════════
+           PERSONALIZATION: Ambiance Volume Slider
+           ══════════════════════════════════════════ */
+        .vol-slider-row { display: flex; align-items: center; gap: 14px; }
+        .vol-slider-icon { flex-shrink: 0; color: rgba(255,255,255,.35); }
+        .vol-slider-track { flex: 1; position: relative; }
+        .vol-slider-track input[type=range] {
+            -webkit-appearance: none; appearance: none;
+            width: 100%; height: 4px; border-radius: 2px;
+            background: rgba(255,255,255,.08);
+            outline: none; cursor: pointer;
+        }
+        .vol-slider-track input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; appearance: none;
+            width: 16px; height: 16px; border-radius: 50%;
+            background: #34d399;
+            box-shadow: 0 0 8px rgba(52,211,153,.45);
+            border: 2px solid rgba(255,255,255,.15);
+            transition: box-shadow .2s, transform .15s;
+        }
+        .vol-slider-track input[type=range]::-webkit-slider-thumb:hover {
+            transform: scale(1.15);
+            box-shadow: 0 0 14px rgba(52,211,153,.6);
+        }
+        .vol-slider-track input[type=range]::-moz-range-thumb {
+            width: 16px; height: 16px; border-radius: 50%;
+            background: #34d399;
+            box-shadow: 0 0 8px rgba(52,211,153,.45);
+            border: 2px solid rgba(255,255,255,.15);
+        }
+        .vol-slider-track input[type=range]::-moz-range-track {
+            height: 4px; border-radius: 2px;
+            background: rgba(255,255,255,.08);
+        }
+        .vol-pct { font-size: 12px; color: rgba(255,255,255,.45); font-variant-numeric: tabular-nums; min-width: 32px; text-align: right; }
+
+        /* ══════════════════════════════════════════
            PERSONALIZATION: Background Animation Toggle
            ══════════════════════════════════════════ */
         html.bg-anim-off .atmo-bg__layer,
@@ -601,6 +712,81 @@
         html.bg-anim-off .mood-glow-orb {
             transition: none !important;
         }
+
+        /* ══════════════════════════════════════════
+           TRACKING PAUSED: Desaturation + Dim
+           ══════════════════════════════════════════ */
+        html.tracking-paused .app {
+            filter: saturate(0.25) brightness(0.7);
+            transition: filter 0.8s ease;
+        }
+        html:not(.tracking-paused) .app {
+            filter: none;
+            transition: filter 0.6s ease;
+        }
+        html.tracking-paused .ambient .g1,
+        html.tracking-paused .ambient .g2,
+        html.tracking-paused .mood-glow-orb,
+        html.tracking-paused .flow-glow-orb--breathing,
+        html.tracking-paused .atmo-bg__layer {
+            animation-play-state: paused !important;
+            opacity: 0.3 !important;
+            transition: opacity 0.8s ease;
+        }
+        html.tracking-paused .sidebar-logo {
+            opacity: 0.45;
+            filter: grayscale(1);
+            transition: opacity 0.4s, filter 0.4s;
+        }
+        html.tracking-paused .hero-pulse {
+            animation: none !important;
+            background: #6b7280 !important;
+        }
+        html.tracking-paused .hero-status-text {
+            color: rgba(255,255,255,.35) !important;
+        }
+
+        /* Tracking paused confirmation modal */
+        .tracking-confirm-overlay {
+            position: fixed; inset: 0; z-index: 99999;
+            background: rgba(0,0,0,.65); backdrop-filter: blur(6px);
+            display: flex; align-items: center; justify-content: center;
+            opacity: 0; pointer-events: none; transition: opacity .3s ease;
+        }
+        .tracking-confirm-overlay.visible {
+            opacity: 1; pointer-events: all;
+        }
+        .tracking-confirm-box {
+            background: #181c25; border: 1px solid rgba(255,255,255,.08);
+            border-radius: 16px; padding: 32px; min-width: 340px;
+            text-align: center; box-shadow: 0 24px 60px rgba(0,0,0,.5);
+        }
+        .tracking-confirm-box h3 {
+            font-size: 16px; color: rgba(255,255,255,.9);
+            margin: 0 0 8px 0; font-weight: 600;
+        }
+        .tracking-confirm-box p {
+            font-size: 13px; color: rgba(255,255,255,.45);
+            margin: 0 0 24px 0; line-height: 1.5;
+        }
+        .tracking-confirm-box .tc-btns {
+            display: flex; gap: 12px; justify-content: center;
+        }
+        .tracking-confirm-box .tc-btn {
+            padding: 10px 24px; border-radius: 10px; border: none;
+            font-size: 13px; font-weight: 500; cursor: pointer;
+            transition: background .2s, transform .15s;
+        }
+        .tracking-confirm-box .tc-btn:active { transform: scale(0.96); }
+        .tracking-confirm-box .tc-btn-cancel {
+            background: rgba(255,255,255,.06); color: rgba(255,255,255,.7);
+        }
+        .tracking-confirm-box .tc-btn-cancel:hover { background: rgba(255,255,255,.1); }
+        .tracking-confirm-box .tc-btn-confirm {
+            background: rgba(239,68,68,.2); color: #f87171;
+            border: 1px solid rgba(239,68,68,.3);
+        }
+        .tracking-confirm-box .tc-btn-confirm:hover { background: rgba(239,68,68,.35); }
 
         /* ══════════════════════════════════════════
            PERSONALIZATION: Theme Selector Grid
@@ -768,9 +954,321 @@
         html[data-theme="light"] .theme-card-name { color: rgba(0,0,0,.65); }
         html[data-theme="light"] .activity-row { color: rgba(0,0,0,.7); }
         html[data-theme="light"] .atmo-bg { opacity: 0.15; }
+
+        /* ── Splash / Intro Screen ── */
+        .splash-overlay {
+            position: fixed; inset: 0; z-index: 99999;
+            background: #0b0e17;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            transition: opacity 0.8s cubic-bezier(.4,0,.2,1), visibility 0.8s;
+        }
+        .splash-overlay.hidden {
+            opacity: 0; visibility: hidden; pointer-events: none;
+        }
+        .splash-logo-container {
+            position: relative;
+            width: 120px; height: 120px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .splash-glow {
+            position: absolute; inset: -60px; border-radius: 50%;
+            background: radial-gradient(circle, rgba(52,211,153,.18) 0%, transparent 70%);
+            filter: blur(40px);
+            animation: splashGlowPulse 2.5s ease-in-out infinite;
+        }
+        @keyframes splashGlowPulse {
+            0%, 100% { transform: scale(1); opacity: .5; }
+            50%      { transform: scale(1.25); opacity: 1; }
+        }
+        .splash-ring {
+            position: absolute; inset: 0;
+            border: 2px solid rgba(52,211,153,.15);
+            border-radius: 50%;
+            animation: splashRingSpin 4s linear infinite;
+        }
+        .splash-ring::after {
+            content: ''; position: absolute; top: -3px; left: 50%;
+            width: 6px; height: 6px; border-radius: 50%;
+            background: #34d399;
+            box-shadow: 0 0 12px rgba(52,211,153,.8);
+            transform: translateX(-50%);
+        }
+        @keyframes splashRingSpin { to { transform: rotate(360deg); } }
+        .splash-icon {
+            position: relative; z-index: 1;
+            width: 56px; height: 56px; color: #34d399;
+            filter: drop-shadow(0 0 20px rgba(52,211,153,.5));
+            animation: splashIconIn .8s cubic-bezier(.16,1,.3,1) both;
+        }
+        @keyframes splashIconIn {
+            from { opacity: 0; transform: scale(.6); }
+            to   { opacity: 1; transform: scale(1); }
+        }
+        .splash-title {
+            margin-top: 28px;
+            font-size: 28px; font-weight: 700;
+            letter-spacing: .18em;
+            color: rgba(255,255,255,.92);
+            animation: splashTextIn 1s .3s cubic-bezier(.16,1,.3,1) both;
+        }
+        @keyframes splashTextIn {
+            from { opacity: 0; transform: translateY(12px); letter-spacing: .35em; }
+            to   { opacity: 1; transform: translateY(0);   letter-spacing: .18em; }
+        }
+        .splash-sub {
+            margin-top: 8px;
+            font-size: 12px; color: rgba(255,255,255,.3);
+            letter-spacing: .08em;
+            animation: splashTextIn 1s .6s cubic-bezier(.16,1,.3,1) both;
+        }
+        .splash-bar-track {
+            margin-top: 32px; width: 180px; height: 2px;
+            background: rgba(255,255,255,.06); border-radius: 2px;
+            overflow: hidden;
+            animation: splashTextIn .6s .8s cubic-bezier(.16,1,.3,1) both;
+        }
+        .splash-bar-fill {
+            width: 0%; height: 100%; border-radius: 2px;
+            background: linear-gradient(90deg, #34d399, #22d3ee);
+            box-shadow: 0 0 10px rgba(52,211,153,.5);
+            animation: splashBarFill 3s 1s cubic-bezier(.25,.46,.45,.94) forwards;
+        }
+        @keyframes splashBarFill { to { width: 100%; } }
+
+        /* ══════════════════════════════════════════
+           SKILL TREE — Goals Page
+           ══════════════════════════════════════════ */
+        .skilltree-layout {
+            display: flex; flex: 1; min-height: 0; gap: 0; height: calc(100vh - 120px);
+        }
+        .skilltree-canvas-wrap {
+            flex: 1; min-width: 0; position: relative; overflow: hidden;
+            border-radius: 16px 0 0 16px;
+            background: rgba(255,255,255,.02);
+            border: 1px solid rgba(255,255,255,.06);
+        }
+        .skilltree-svg {
+            width: 100%; height: 100%; display: block;
+            cursor: grab;
+        }
+        .skilltree-svg:active { cursor: grabbing; }
+        .st-zoom-controls {
+            position: absolute; bottom: 16px; right: 16px;
+            display: flex; flex-direction: column; gap: 4px; z-index: 5;
+        }
+        .st-zoom-btn {
+            width: 36px; height: 36px; border-radius: 10px;
+            border: 1px solid rgba(255,255,255,.1);
+            background: rgba(0,0,0,.4); backdrop-filter: blur(12px);
+            color: rgba(255,255,255,.7); font-size: 18px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: background .15s, color .15s;
+        }
+        .st-zoom-btn:hover { background: rgba(255,255,255,.1); color: #fff; }
+        .st-lod-badge {
+            position: absolute; top: 12px; left: 12px; z-index: 5;
+            padding: 4px 10px; border-radius: 8px; font-size: 11px;
+            background: rgba(0,0,0,.5); backdrop-filter: blur(8px);
+            color: rgba(255,255,255,.5); border: 1px solid rgba(255,255,255,.06);
+            pointer-events: none;
+        }
+        .st-node-major rect { fill: rgba(99,102,241,.15); stroke: rgba(99,102,241,.4); stroke-width: 2; rx: 14; }
+        .st-node-major:hover rect { fill: rgba(99,102,241,.25); stroke: rgba(99,102,241,.6); }
+        .st-node-major text { fill: rgba(255,255,255,.9); font-size: 13px; font-weight: 600; }
+        .st-node-minor rect { fill: rgba(52,211,153,.1); stroke: rgba(52,211,153,.3); stroke-width: 1.5; rx: 12; }
+        .st-node-minor:hover rect { fill: rgba(52,211,153,.2); stroke: rgba(52,211,153,.5); }
+        .st-node-minor text { fill: rgba(255,255,255,.8); font-size: 12px; font-weight: 500; }
+        .st-node-micro rect { fill: rgba(255,255,255,.04); stroke: rgba(255,255,255,.12); stroke-width: 1; rx: 10; }
+        .st-node-micro:hover rect { fill: rgba(255,255,255,.08); stroke: rgba(255,255,255,.2); }
+        .st-node-micro text { fill: rgba(255,255,255,.7); font-size: 11px; }
+        .st-node-micro.st-done rect { fill: rgba(52,211,153,.12); stroke: rgba(52,211,153,.35); }
+        .st-node-micro.st-done text { fill: #34d399; }
+        .st-node-micro.st-selected rect { stroke: #818cf8; stroke-width: 2; filter: drop-shadow(0 0 8px rgba(129,140,248,.3)); }
+        .st-edge { stroke: rgba(255,255,255,.08); stroke-width: 1.5; fill: none; }
+        .st-edge-done { stroke: rgba(52,211,153,.25); }
+        .st-progress-text { font-size: 10px; fill: rgba(255,255,255,.4); }
+        .skilltree-detail {
+            width: 380px; flex-shrink: 0; overflow-y: auto;
+            padding: 20px; display: flex; flex-direction: column; gap: 14px;
+            background: rgba(255,255,255,.03); backdrop-filter: blur(24px);
+            border: 1px solid rgba(255,255,255,.06); border-left: none;
+            border-radius: 0 16px 16px 0;
+        }
+        .skilltree-detail.st-collapsed { width: 0; padding: 0; overflow: hidden; border: none; }
+        .st-detail-empty {
+            flex: 1; display: flex; align-items: center; justify-content: center;
+            flex-direction: column; gap: 12px; color: rgba(255,255,255,.3); font-size: 13px;
+        }
+        .st-detail-empty svg { width: 40px; height: 40px; opacity: .3; }
+        .st-detail-title { font-size: 18px; font-weight: 600; color: rgba(255,255,255,.9); line-height: 1.3; }
+        .st-detail-id { font-size: 11px; color: rgba(255,255,255,.25); font-family: monospace; }
+        .st-detail-desc { font-size: 13px; color: rgba(255,255,255,.5); line-height: 1.6; }
+        .st-detail-section { margin-top: 4px; }
+        .st-detail-section-title {
+            font-size: 11px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: .06em; color: rgba(255,255,255,.35); margin-bottom: 8px;
+        }
+        .st-ac-box {
+            padding: 14px 16px; border-radius: 12px;
+            background: rgba(251,191,36,.06); border: 1px solid rgba(251,191,36,.15);
+        }
+        .st-ac-label {
+            font-size: 10px; font-weight: 700; text-transform: uppercase;
+            letter-spacing: .08em; color: #fbbf24; margin-bottom: 6px;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .st-ac-text { font-size: 13px; color: rgba(255,255,255,.75); line-height: 1.5; }
+        .st-evidence-box {
+            padding: 14px 16px; border-radius: 12px;
+            background: rgba(52,211,153,.04); border: 1px solid rgba(52,211,153,.12);
+        }
+        .st-evidence-label {
+            font-size: 10px; font-weight: 700; text-transform: uppercase;
+            letter-spacing: .08em; color: #34d399; margin-bottom: 8px;
+        }
+        .st-evidence-input {
+            width: 100%; padding: 10px 12px; border-radius: 8px;
+            background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
+            color: rgba(255,255,255,.8); font-size: 13px; font-family: inherit;
+            outline: none; transition: border-color .2s; resize: vertical; min-height: 40px;
+        }
+        .st-evidence-input:focus { border-color: rgba(52,211,153,.4); }
+        .st-evidence-input::placeholder { color: rgba(255,255,255,.25); }
+        .st-status-badge {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 4px 12px; border-radius: 99px; font-size: 11px; font-weight: 600;
+        }
+        .st-status-open { background: rgba(255,255,255,.06); color: rgba(255,255,255,.5); }
+        .st-status-done { background: rgba(52,211,153,.12); color: #34d399; }
+        .st-done-btn {
+            width: 100%; padding: 12px; border-radius: 12px; border: none;
+            font-size: 14px; font-weight: 600; cursor: pointer;
+            transition: background .2s, transform .1s, opacity .2s;
+        }
+        .st-done-btn:active { transform: scale(0.97); }
+        .st-done-btn.st-btn-enabled {
+            background: rgba(52,211,153,.2); color: #34d399;
+            border: 1px solid rgba(52,211,153,.3);
+        }
+        .st-done-btn.st-btn-enabled:hover { background: rgba(52,211,153,.3); }
+        .st-done-btn.st-btn-disabled {
+            background: rgba(255,255,255,.04); color: rgba(255,255,255,.25);
+            cursor: not-allowed; opacity: .6;
+        }
+        .st-dep-list { list-style: none; padding: 0; }
+        .st-dep-list li {
+            font-size: 12px; color: rgba(255,255,255,.5); padding: 4px 0 4px 18px;
+            position: relative;
+        }
+        .st-dep-list li::before {
+            content: ''; position: absolute; left: 0; top: 10px;
+            width: 8px; height: 8px; border-radius: 50%;
+            border: 1.5px solid rgba(255,255,255,.2);
+        }
+        .st-dep-list li.st-dep-done::before { background: #34d399; border-color: #34d399; }
+        .st-empty-state {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            flex: 1; gap: 16px; padding: 48px; min-height: 400px;
+        }
+        .st-empty-state svg { width: 64px; height: 64px; color: rgba(255,255,255,.12); }
+        .st-empty-state p { font-size: 14px; color: rgba(255,255,255,.3); text-align: center; max-width: 320px; line-height: 1.6; }
+        html[data-theme="light"] .skilltree-canvas-wrap { background: rgba(0,0,0,.02); border-color: rgba(0,0,0,.06); }
+        html[data-theme="light"] .skilltree-detail { background: rgba(255,255,255,.7); border-color: rgba(0,0,0,.06); }
+        html[data-theme="light"] .st-detail-title { color: rgba(0,0,0,.85); }
+        html[data-theme="light"] .st-detail-desc { color: rgba(0,0,0,.5); }
+        html[data-theme="light"] .st-ac-box { background: rgba(251,191,36,.08); border-color: rgba(251,191,36,.2); }
+        html[data-theme="light"] .st-ac-text { color: rgba(0,0,0,.65); }
+        html[data-theme="light"] .st-node-micro rect { fill: rgba(0,0,0,.03); stroke: rgba(0,0,0,.1); }
+        html[data-theme="light"] .st-edge { stroke: rgba(0,0,0,.08); }
+        html[data-theme="light"] .st-evidence-input { background: rgba(0,0,0,.04); border-color: rgba(0,0,0,.1); color: rgba(0,0,0,.8); }
+
+        /* Replan overlay */
+        .st-replan-overlay {
+            position: absolute; inset: 0; z-index: 20;
+            display: flex; align-items: center; justify-content: center;
+            flex-direction: column; gap: 16px;
+            background: rgba(0,0,0,.6); backdrop-filter: blur(8px);
+            border-radius: 16px;
+            opacity: 0; pointer-events: none;
+            transition: opacity .3s ease;
+        }
+        .st-replan-overlay.st-visible { opacity: 1; pointer-events: auto; }
+        .st-replan-spinner {
+            width: 40px; height: 40px; border-radius: 50%;
+            border: 3px solid rgba(255,255,255,.1);
+            border-top-color: #818cf8;
+            animation: stSpin .8s linear infinite;
+        }
+        @keyframes stSpin { to { transform: rotate(360deg); } }
+        .st-replan-label { font-size: 14px; color: rgba(255,255,255,.7); font-weight: 500; }
+        .st-replan-progress {
+            width: 160px; height: 3px; border-radius: 2px;
+            background: rgba(255,255,255,.08); overflow: hidden;
+        }
+        .st-replan-progress-bar {
+            height: 100%; border-radius: 2px; width: 0%;
+            background: linear-gradient(90deg, #818cf8, #34d399);
+            transition: width .4s ease;
+        }
+
+        /* Diff debug panel */
+        .st-diff-panel {
+            position: absolute; bottom: 16px; left: 16px; z-index: 15;
+            max-width: 360px; max-height: 280px; overflow-y: auto;
+            padding: 14px 16px; border-radius: 12px;
+            background: rgba(0,0,0,.7); backdrop-filter: blur(16px);
+            border: 1px solid rgba(255,255,255,.08);
+            font-size: 11px; color: rgba(255,255,255,.6);
+            display: none;
+        }
+        .st-diff-panel.st-visible { display: block; }
+        .st-diff-title {
+            font-size: 10px; font-weight: 700; text-transform: uppercase;
+            letter-spacing: .08em; color: rgba(255,255,255,.35); margin-bottom: 8px;
+        }
+        .st-diff-entry { padding: 3px 0; display: flex; align-items: center; gap: 6px; }
+        .st-diff-badge {
+            font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 4px;
+            text-transform: uppercase; letter-spacing: .04em;
+        }
+        .st-diff-added { background: rgba(52,211,153,.15); color: #34d399; }
+        .st-diff-removed { background: rgba(239,68,68,.15); color: #f87171; }
+        .st-diff-changed { background: rgba(251,191,36,.15); color: #fbbf24; }
+        .st-diff-summary {
+            margin-top: 8px; padding-top: 8px;
+            border-top: 1px solid rgba(255,255,255,.06);
+            font-size: 10px; color: rgba(255,255,255,.4);
+        }
     </style>
 </head>
 <body>
+    <!-- ── Splash / Intro Overlay ── -->
+    <div class="splash-overlay" id="splashOverlay">
+        <div class="splash-logo-container">
+            <div class="splash-glow"></div>
+            <div class="splash-ring"></div>
+            <svg class="splash-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/>
+                <circle cx="12" cy="12" r="3"/>
+            </svg>
+        </div>
+        <span class="splash-title">VIGILANT</span>
+        <span class="splash-sub">Aktivite İzleme Sistemi</span>
+        <div class="splash-bar-track"><div class="splash-bar-fill"></div></div>
+    </div>
+
+    <!-- ── Tracking Pause Confirmation Modal ── -->
+    <div class="tracking-confirm-overlay" id="trackingConfirmOverlay">
+        <div class="tracking-confirm-box">
+            <h3>İzlemeyi Duraklat</h3>
+            <p>İzleme duraklatıldığında pencere takibi, aktivite kaydı ve arka plan animasyonları duracaktır. Devam etmek istiyor musun?</p>
+            <div class="tc-btns">
+                <button class="tc-btn tc-btn-cancel" onclick="cancelTrackingPause()">Vazgeç</button>
+                <button class="tc-btn tc-btn-confirm" onclick="confirmTrackingPause()">Evet, Duraklat</button>
+            </div>
+        </div>
+    </div>
     <!-- Atmospheric Image BG (3-layer parallax) -->
     <div class="atmo-bg" id="atmoBg">
         <div class="atmo-bg__layer atmo-bg__layer--1"></div>
@@ -788,7 +1286,7 @@
     <div class="app">
         <!-- Sidebar -->
         <aside class="sidebar">
-            <div class="sidebar-logo">
+            <div class="sidebar-logo" onclick="onTrackingEyeClick()" style="cursor:pointer" title="İzlemeyi Duraklat / Başlat">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
             </div>
             <nav>
@@ -806,6 +1304,9 @@
                 </button>
                 <button data-vc-tip="Settings" data-vc-tip-pos="bottom" data-page="settings" onclick="navigateTo('settings')">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                </button>
+                <button data-vc-tip="Hedefler" data-vc-tip-pos="bottom" data-page="goals" onclick="navigateTo('goals')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
                 </button>
             </nav>
             <div class="sidebar-avatar">V</div>
@@ -1038,6 +1539,20 @@
                         </div>
                         <div id="aiAuditLog" style="display:flex;flex-direction:column;gap:4px;max-height:400px;overflow-y:auto">
                             <div style="text-align:center;padding:16px;color:rgba(255,255,255,.3);font-size:13px">Yükleniyor...</div>
+                        </div>
+                    </div>
+                    <!-- Token Odometer Card -->
+                    <div class="glass-card token-odometer" id="tokenOdometerCard">
+                        <div class="token-odometer-header">
+                            <span class="token-odometer-label">⚡ Token Quota</span>
+                            <span class="token-odometer-value" id="tokenOdometerValue">0 / 1M</span>
+                        </div>
+                        <div class="token-bar-track">
+                            <div class="token-bar-fill" id="tokenBarFill" style="width:0%"></div>
+                        </div>
+                        <div class="token-odometer-footer">
+                            <span class="token-odometer-req" id="tokenOdometerReq">Son istek: --</span>
+                            <span class="token-odometer-pct" id="tokenOdometerPct">0%</span>
                         </div>
                     </div>
                     <div class="glass-card" style="padding:20px">
@@ -1279,6 +1794,30 @@
                             <span class="toggle-slider"></span>
                         </label>
                     </div>
+                    <div class="settings-row">
+                        <div class="settings-row-info">
+                            <div class="settings-row-title">Ambiyans Sesi</div>
+                            <div class="settings-row-desc">Arka planda çalan hafif ortam sesini aç / kapat</div>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="settAmbianceEnabled" checked onchange="toggleAmbianceEnabled(this.checked)">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="settings-row">
+                        <div class="settings-row-info">
+                            <div class="settings-row-title">Ses Düzeyi</div>
+                            <div class="settings-row-desc">Ambiyans sesinin şiddetini ayarlayın</div>
+                        </div>
+                        <div class="vol-slider-row">
+                            <svg class="vol-slider-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/></svg>
+                            <div class="vol-slider-track">
+                                <input type="range" id="settAmbianceVol" min="0" max="100" value="50" oninput="onAmbianceVolSlider(this.value)">
+                            </div>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                            <span class="vol-pct" id="settAmbianceVolPct">50%</span>
+                        </div>
+                    </div>
                     <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:12px;border-bottom:none">
                         <div class="settings-row-info">
                             <div class="settings-row-title">Arayüz Teması</div>
@@ -1325,12 +1864,15 @@
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
                         İzleme Tercihleri
                     </h3>
-                    <div class="settings-row infra-gap-row">
+                    <div class="settings-row" id="settTrackingRow">
                         <div class="settings-row-info">
-                            <div class="settings-row-title" style="color:rgba(255,255,255,.45)">İzleme Duraklat / Başlat</div>
+                            <div class="settings-row-title">İzleme Duraklat / Başlat</div>
                             <div class="settings-row-desc">Tracking engine'i geçici olarak duraklatma</div>
                         </div>
-                        <span class="infra-tag">ALTYAPI GEREKLİ</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="settTrackingToggle" checked onchange="onSettingsTrackingToggle(this.checked)">
+                            <span class="toggle-slider"></span>
+                        </label>
                     </div>
                     <div class="settings-row infra-gap-row">
                         <div class="settings-row-info">
@@ -1393,6 +1935,85 @@
                             <div style="font-size:12px;color:rgba(255,255,255,.35);margin-top:2px">Productivity Tracker &bull; Desktop App</div>
                             <div style="font-size:11px;color:rgba(255,255,255,.25);margin-top:2px">C++ / WebView2 / SQLite / Gemini AI</div>
                         </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Page: Goals (Hedefler) — SkillTree -->
+        <main class="main page" id="page-goals" data-page="goals" style="display:none">
+            <div class="header" style="margin-bottom:16px">
+                <div>
+                    <div class="badges">
+                        <div class="badge">
+                            <span class="badge-dot" style="background:#818cf8"></span>
+                            <span class="badge-label">Goal Tracker</span>
+                        </div>
+                        <div class="badge" id="stProgressBadge" style="display:none">
+                            <span class="badge-dot" style="background:#34d399"></span>
+                            <span class="badge-label" id="stProgressLabel">0 / 0</span>
+                        </div>
+                    </div>
+                    <h1>Hedefler</h1>
+                    <p class="header-sub">Hedef ağacını görselleştir, görevleri tamamla</p>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px">
+                    <button class="narrative-btn" id="stReplanBtn" onclick="stRequestReplan()" style="padding:8px 16px" title="Hedef ağacını yeniden hesapla">
+                        🔄 Yeniden Planla
+                    </button>
+                    <button class="narrative-btn" id="stLoadBtn" onclick="stLoadGoalTree()" style="padding:8px 16px">
+                        ⟳ Yükle
+                    </button>
+                </div>
+            </div>
+
+            <!-- SkillTree content area -->
+            <div id="stContent">
+                <!-- Empty state (shown when no GoalTree loaded) -->
+                <div class="st-empty-state" id="stEmptyState">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
+                    </svg>
+                    <p>Henüz bir hedef ağacı yüklenmedi.<br>Önce bir Socratic Interview tamamlayıp GoalTree oluşturun, ardından <strong>"Yükle"</strong> butonuna tıklayın.</p>
+                </div>
+
+                <!-- SkillTree layout (hidden until data loaded) -->
+                <div class="skilltree-layout" id="stLayout" style="display:none">
+                    <div class="skilltree-canvas-wrap" id="stCanvasWrap">
+                        <div class="st-lod-badge" id="stLodBadge"></div>
+                        <svg class="skilltree-svg" id="stSvg" xmlns="http://www.w3.org/2000/svg">
+                            <defs>
+                                <filter id="stGlow">
+                                    <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                                    <feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                                </filter>
+                            </defs>
+                            <g id="stRoot"></g>
+                        </svg>
+                        <div class="st-zoom-controls">
+                            <button class="st-zoom-btn" onclick="stZoom(1.2)" title="Yakınlaştır">+</button>
+                            <button class="st-zoom-btn" onclick="stZoom(0.83)" title="Uzaklaştır">−</button>
+                            <button class="st-zoom-btn" onclick="stResetView()" title="Sıfırla" style="font-size:13px">⌂</button>
+                        </div>
+                        <!-- Replan overlay -->
+                        <div class="st-replan-overlay" id="stReplanOverlay">
+                            <div class="st-replan-spinner"></div>
+                            <div class="st-replan-label">Rota Yeniden Hesaplanıyor…</div>
+                            <div class="st-replan-progress">
+                                <div class="st-replan-progress-bar" id="stReplanBar"></div>
+                            </div>
+                        </div>
+                        <!-- Diff debug panel -->
+                        <div class="st-diff-panel" id="stDiffPanel"></div>
+                    </div>
+                    <div class="skilltree-detail" id="stDetail">
+                        <div class="st-detail-empty" id="stDetailEmpty">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5"/>
+                            </svg>
+                            <span>Detayları görmek için bir MicroTask'a tıklayın</span>
+                        </div>
+                        <div id="stDetailContent" style="display:none"></div>
                     </div>
                 </div>
             </div>
@@ -1642,6 +2263,7 @@
             else if (pageName === 'ai-insights') loadAIInsightsPage();
             else if (pageName === 'history') loadHistoryPage();
             else if (pageName === 'settings') loadSettingsPage();
+            else if (pageName === 'goals') stLoadGoalTree();
         }
 
         var appIcons = {
@@ -2281,6 +2903,42 @@
         }
 
         // =============================================
+        // Token Odometer — DOM update handler
+        // =============================================
+        function _formatTokenCount(n) {
+            if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+            if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+            return String(n);
+        }
+        function _formatTokenNumber(n) {
+            return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        }
+        function _updateTokenOdometer(payload) {
+            if (!payload) return;
+            var daily = payload.dailyTotalTokens || 0;
+            var limit = payload.dailyLimit || 1000000;
+            var req   = payload.tokensUsedThisRequest || 0;
+            var pct   = Math.min((daily / limit) * 100, 100);
+
+            var valueEl = document.getElementById('tokenOdometerValue');
+            var fillEl  = document.getElementById('tokenBarFill');
+            var reqEl   = document.getElementById('tokenOdometerReq');
+            var pctEl   = document.getElementById('tokenOdometerPct');
+
+            if (valueEl) valueEl.textContent = _formatTokenCount(daily) + ' / ' + _formatTokenCount(limit);
+            if (fillEl) {
+                fillEl.style.width = pct.toFixed(2) + '%';
+                if (pct >= 80) {
+                    fillEl.classList.add('warning');
+                } else {
+                    fillEl.classList.remove('warning');
+                }
+            }
+            if (reqEl) reqEl.textContent = 'Son istek: +' + _formatTokenNumber(req);
+            if (pctEl) pctEl.textContent = pct.toFixed(1) + '%';
+        }
+
+        // =============================================
         // Page: AI Insights — data loader & renderers
         // =============================================
         async function loadAIInsightsPage() {
@@ -2639,13 +3297,12 @@
         // Model listeleri (saglayiciya gore)
         var _aiModelMap = {
             gemini: [
-                { value: 'gemini-3.0-flash', label: 'Gemini 3 Flash' },
-                { value: 'gemini-3.0-flash-lite', label: 'Gemini 3 Flash Lite' },
-                { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-                { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+                { value: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro (Preview)' },
+                { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash (Preview)' },
+                { value: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash-Lite (Preview)' },
                 { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-                { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
-                { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' }
+                { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+                { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' }
             ],
             openai: [
                 { value: 'gpt-4o', label: 'GPT-4o' },
@@ -2902,8 +3559,126 @@
                 var savedBgAnim = localStorage.getItem('vigilant-bg-anim');
                 var toggle = document.getElementById('settBgAnim');
                 if (toggle) toggle.checked = (savedBgAnim !== '0');
+
+                // Ambiance sound controls
+                var amb = window._vigilantAmbiance;
+                var enToggle = document.getElementById('settAmbianceEnabled');
+                var volSlider = document.getElementById('settAmbianceVol');
+                var volPct = document.getElementById('settAmbianceVolPct');
+                if (amb) {
+                    if (enToggle) enToggle.checked = amb.isEnabled();
+                    if (volSlider) volSlider.value = amb.getVolume();
+                    if (volPct) volPct.textContent = amb.getVolume() + '%';
+                }
+
+                // Tracking toggle sync
+                var trackToggle = document.getElementById('settTrackingToggle');
+                if (trackToggle) trackToggle.checked = !_trackingPaused;
             } catch(e) {}
         }
+
+        // ── Ambiance UI callbacks (called from Settings page) ──
+        function toggleAmbianceEnabled(on) {
+            var amb = window._vigilantAmbiance;
+            if (amb) amb.setEnabled(on);
+        }
+        function onAmbianceVolSlider(val) {
+            var pct = document.getElementById('settAmbianceVolPct');
+            if (pct) pct.textContent = val + '%';
+            var amb = window._vigilantAmbiance;
+            if (amb) amb.setVolume(parseInt(val, 10));
+        }
+
+        // =============================================
+        // Tracking Toggle (eye icon + settings + visual state)
+        // =============================================
+        var _trackingPaused = false;
+
+        function onTrackingEyeClick() {
+            if (_trackingPaused) {
+                resumeTrackingNow();
+            } else {
+                showTrackingConfirm();
+            }
+        }
+
+        function showTrackingConfirm() {
+            var overlay = document.getElementById('trackingConfirmOverlay');
+            if (overlay) overlay.classList.add('visible');
+        }
+
+        function cancelTrackingPause() {
+            var overlay = document.getElementById('trackingConfirmOverlay');
+            if (overlay) overlay.classList.remove('visible');
+        }
+
+        async function confirmTrackingPause() {
+            var overlay = document.getElementById('trackingConfirmOverlay');
+            if (overlay) overlay.classList.remove('visible');
+            try { await window.dashboardAPI.pauseTracking(); } catch(e) { console.warn('pauseTracking failed:', e); }
+            _trackingPaused = true;
+            applyTrackingVisualState();
+        }
+
+        async function resumeTrackingNow() {
+            try { await window.dashboardAPI.resumeTracking(); } catch(e) { console.warn('resumeTracking failed:', e); }
+            _trackingPaused = false;
+            applyTrackingVisualState();
+        }
+
+        function applyTrackingVisualState() {
+            var root = document.documentElement;
+            var heroText = document.querySelector('.hero-status-text');
+            var heroPulse = document.querySelector('.hero-pulse');
+            var settToggle = document.getElementById('settTrackingToggle');
+
+            if (_trackingPaused) {
+                root.classList.add('tracking-paused');
+                if (heroText) heroText.textContent = 'İzleme Duraklatıldı';
+                if (heroPulse) heroPulse.style.background = '#6b7280';
+                if (settToggle) settToggle.checked = false;
+                // Mute ambiance when paused
+                var amb = window._vigilantAmbiance;
+                if (amb) amb.setEnabled(false);
+            } else {
+                root.classList.remove('tracking-paused');
+                if (heroText) heroText.textContent = 'Vigilant Aktif';
+                if (heroPulse) heroPulse.style.background = '';
+                if (settToggle) settToggle.checked = true;
+                // Restore ambiance
+                var amb = window._vigilantAmbiance;
+                var savedAmb = true;
+                try { savedAmb = localStorage.getItem('vigilant-ambiance-enabled') !== '0'; } catch(e) {}
+                if (amb && savedAmb) amb.setEnabled(true);
+            }
+            try { localStorage.setItem('vigilant-tracking-paused', _trackingPaused ? '1' : '0'); } catch(e) {}
+        }
+
+        function onSettingsTrackingToggle(enabled) {
+            if (enabled) {
+                resumeTrackingNow();
+            } else {
+                showTrackingConfirm();
+                // Revert the toggle until confirmed
+                var t = document.getElementById('settTrackingToggle');
+                if (t) t.checked = true;
+            }
+        }
+
+        // Restore tracking paused state on load
+        (function() {
+            try {
+                var saved = localStorage.getItem('vigilant-tracking-paused');
+                if (saved === '1') {
+                    _trackingPaused = true;
+                    // Defer visual application until DOM ready
+                    setTimeout(function() {
+                        window.dashboardAPI.pauseTracking().catch(function(){});
+                        applyTrackingVisualState();
+                    }, 100);
+                }
+            } catch(e) {}
+        })();
 
         // =============================================
         // Atmospheric Parallax (throttled via rAF)
@@ -2938,6 +3713,934 @@
                 }
             });
         })();
+
+        // =============================================
+        // SkillTree — Goal Tree Visualization Engine
+        // =============================================
+        var SkillTree = (function() {
+            // ── State ──
+            var _tree = null;        // GoalTree JSON
+            var _selectedMicroId = null;
+            var _microIndex = {};    // id → {micro, minorId, majorId}
+            var _pan = { x: 0, y: 0 };
+            var _scale = 1;
+            var _dragging = false;
+            var _dragStart = { x: 0, y: 0 };
+            var _panStart = { x: 0, y: 0 };
+            // LOD thresholds
+            var LOD_MICRO = 0.4;     // below this zoom, hide micro labels
+            var LOD_MINOR = 0.2;     // below this zoom, hide minor labels
+            // Node sizing
+            var MAJOR_W = 220, MAJOR_H = 52;
+            var MINOR_W = 180, MINOR_H = 42;
+            var MICRO_W = 160, MICRO_H = 36;
+            var H_GAP = 60, V_GAP = 24;
+            // Viewport virtualization
+            var _viewport = { x: 0, y: 0, w: 0, h: 0 };
+            var _allNodes = [];      // flat list of {id, type, x, y, w, h, data, parentId}
+            var _allEdges = [];      // {from, to, fromDone}
+
+            function init() {
+                var svg = document.getElementById('stSvg');
+                if (!svg) return;
+                svg.addEventListener('mousedown', onDragStart);
+                svg.addEventListener('mousemove', onDragMove);
+                svg.addEventListener('mouseup', onDragEnd);
+                svg.addEventListener('mouseleave', onDragEnd);
+                svg.addEventListener('wheel', onWheel, { passive: false });
+                // Listen for backend status change responses
+                if (window.chrome && window.chrome.webview) {
+                    window.chrome.webview.addEventListener('message', function(e) {
+                        var d = e.data;
+                        if (!d || !d.type) return;
+                        if (d.type === 'MicroTaskStatusChanged' && d.payload) {
+                            _handleStatusChanged(d.payload);
+                        } else if (d.type === 'MicroTaskStatusChangeFailed' && d.payload) {
+                            _handleStatusChangeFailed(d.payload);
+                        } else if (d.type === 'GoalTreeGenerated' && d.payload && d.payload.goalTree) {
+                            loadTree(d.payload.goalTree);
+                        } else if (d.type === 'ReplanCompleted' && d.payload) {
+                            _handleReplanCompleted(d.payload);
+                        } else if (d.type === 'ReplanFailed' && d.payload) {
+                            _handleReplanFailed(d.payload);
+                        }
+                    });
+                }
+            }
+
+            // ── Data Loading ──
+            function loadTree(tree) {
+                if (!tree || !tree.majors) return;
+                _tree = tree;
+                _selectedMicroId = null;
+                _buildIndex();
+                _layout();
+                _render();
+                _updateProgress();
+                // Show layout, hide empty
+                var layout = document.getElementById('stLayout');
+                var empty = document.getElementById('stEmptyState');
+                if (layout) layout.style.display = '';
+                if (empty) empty.style.display = 'none';
+                // Reset detail
+                _showDetailEmpty();
+            }
+
+            function _buildIndex() {
+                _microIndex = {};
+                if (!_tree) return;
+                for (var mi = 0; mi < _tree.majors.length; mi++) {
+                    var maj = _tree.majors[mi];
+                    for (var ni = 0; ni < maj.minors.length; ni++) {
+                        var min = maj.minors[ni];
+                        for (var ui = 0; ui < min.micros.length; ui++) {
+                            var mic = min.micros[ui];
+                            _microIndex[mic.id] = { micro: mic, minorId: min.id, majorId: maj.id };
+                        }
+                    }
+                }
+            }
+
+            // ── Hierarchical layout (top-down) ──
+            function _layout() {
+                _allNodes = [];
+                _allEdges = [];
+                if (!_tree) return;
+                var yOff = 40;
+                for (var mi = 0; mi < _tree.majors.length; mi++) {
+                    var maj = _tree.majors[mi];
+                    // Place major
+                    var majX = 40;
+                    var majY = yOff;
+                    _allNodes.push({ id: maj.id, type: 'major', x: majX, y: majY, w: MAJOR_W, h: MAJOR_H, data: maj });
+                    yOff += MAJOR_H + V_GAP;
+                    for (var ni = 0; ni < maj.minors.length; ni++) {
+                        var min = maj.minors[ni];
+                        var minX = majX + 40;
+                        var minY = yOff;
+                        _allNodes.push({ id: min.id, type: 'minor', x: minX, y: minY, w: MINOR_W, h: MINOR_H, data: min, parentId: maj.id });
+                        _allEdges.push({ from: maj.id, to: min.id, fromDone: false });
+                        yOff += MINOR_H + V_GAP;
+                        for (var ui = 0; ui < min.micros.length; ui++) {
+                            var mic = min.micros[ui];
+                            var micX = minX + 40;
+                            var micY = yOff;
+                            _allNodes.push({ id: mic.id, type: 'micro', x: micX, y: micY, w: MICRO_W, h: MICRO_H, data: mic, parentId: min.id });
+                            _allEdges.push({ from: min.id, to: mic.id, fromDone: mic.status === 'done' });
+                            yOff += MICRO_H + V_GAP / 2;
+                        }
+                        yOff += V_GAP / 2;
+                    }
+                    yOff += H_GAP;
+                }
+            }
+
+            // ── Viewport calculation for virtualized rendering ──
+            function _calcViewport() {
+                var wrap = document.getElementById('stCanvasWrap');
+                if (!wrap) return;
+                _viewport.w = wrap.clientWidth;
+                _viewport.h = wrap.clientHeight;
+                _viewport.x = -_pan.x / _scale;
+                _viewport.y = -_pan.y / _scale;
+            }
+
+            function _isVisible(node) {
+                var margin = 100 / _scale;
+                var vx = _viewport.x - margin;
+                var vy = _viewport.y - margin;
+                var vr = _viewport.x + _viewport.w / _scale + margin;
+                var vb = _viewport.y + _viewport.h / _scale + margin;
+                return !(node.x + node.w < vx || node.x > vr || node.y + node.h < vy || node.y > vb);
+            }
+
+            // ── SVG Rendering with virtualization ──
+            function _render() {
+                var root = document.getElementById('stRoot');
+                if (!root) return;
+                _calcViewport();
+                // Apply transform
+                root.setAttribute('transform', 'translate(' + _pan.x + ',' + _pan.y + ') scale(' + _scale + ')');
+                // Clear
+                root.innerHTML = '';
+                var visibleCount = 0;
+                // Edges first (behind nodes)
+                for (var ei = 0; ei < _allEdges.length; ei++) {
+                    var edge = _allEdges[ei];
+                    var fromN = _findNode(edge.from);
+                    var toN = _findNode(edge.to);
+                    if (!fromN || !toN) continue;
+                    if (!_isVisible(fromN) && !_isVisible(toN)) continue;
+                    var x1 = fromN.x + fromN.w / 2;
+                    var y1 = fromN.y + fromN.h;
+                    var x2 = toN.x + toN.w / 2;
+                    var y2 = toN.y;
+                    var midY = (y1 + y2) / 2;
+                    var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    path.setAttribute('d', 'M' + x1 + ',' + y1 + ' C' + x1 + ',' + midY + ' ' + x2 + ',' + midY + ' ' + x2 + ',' + y2);
+                    path.setAttribute('class', 'st-edge' + (edge.fromDone ? ' st-edge-done' : ''));
+                    root.appendChild(path);
+                }
+                // Nodes (virtualized: only render visible)
+                for (var ni = 0; ni < _allNodes.length; ni++) {
+                    var node = _allNodes[ni];
+                    if (!_isVisible(node)) continue;
+                    visibleCount++;
+                    _renderNode(root, node);
+                }
+                // LOD badge
+                var badge = document.getElementById('stLodBadge');
+                if (badge) {
+                    badge.textContent = 'Zoom: ' + Math.round(_scale * 100) + '% • ' + visibleCount + '/' + _allNodes.length + ' node';
+                }
+            }
+
+            function _findNode(id) {
+                for (var i = 0; i < _allNodes.length; i++) {
+                    if (_allNodes[i].id === id) return _allNodes[i];
+                }
+                return null;
+            }
+
+            function _renderNode(root, node) {
+                var g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                var cls = 'st-node-' + node.type;
+                if (node.type === 'micro') {
+                    if (node.data.status === 'done') cls += ' st-done';
+                    if (node.data.id === _selectedMicroId) cls += ' st-selected';
+                }
+                g.setAttribute('class', cls);
+                g.style.cursor = 'pointer';
+                // Rect
+                var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', node.x); rect.setAttribute('y', node.y);
+                rect.setAttribute('width', node.w); rect.setAttribute('height', node.h);
+                g.appendChild(rect);
+                // Label (LOD: skip text at extreme zoom-out)
+                var showLabel = true;
+                if (node.type === 'micro' && _scale < LOD_MICRO) showLabel = false;
+                if (node.type === 'minor' && _scale < LOD_MINOR) showLabel = false;
+                if (showLabel) {
+                    var text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('x', node.x + 12); text.setAttribute('y', node.y + node.h / 2 + 4);
+                    var label = node.data.title || node.data.id;
+                    var maxChars = node.type === 'major' ? 26 : node.type === 'minor' ? 22 : 18;
+                    if (label.length > maxChars) label = label.substring(0, maxChars - 1) + '…';
+                    text.textContent = label;
+                    g.appendChild(text);
+                    // Status icon for micro
+                    if (node.type === 'micro') {
+                        var icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                        icon.setAttribute('x', node.x + node.w - 24);
+                        icon.setAttribute('y', node.y + node.h / 2 + 4);
+                        icon.setAttribute('font-size', '12');
+                        icon.textContent = node.data.status === 'done' ? '✓' : '○';
+                        icon.setAttribute('fill', node.data.status === 'done' ? '#34d399' : 'rgba(255,255,255,.3)');
+                        g.appendChild(icon);
+                    }
+                    // Progress for minor
+                    if (node.type === 'minor' && node.data.micros) {
+                        var done = 0;
+                        for (var k = 0; k < node.data.micros.length; k++) {
+                            if (node.data.micros[k].status === 'done') done++;
+                        }
+                        var pText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                        pText.setAttribute('class', 'st-progress-text');
+                        pText.setAttribute('x', node.x + node.w - 32);
+                        pText.setAttribute('y', node.y + node.h / 2 + 3);
+                        pText.textContent = done + '/' + node.data.micros.length;
+                        g.appendChild(pText);
+                    }
+                }
+                // Click handler
+                (function(n) {
+                    g.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        if (n.type === 'micro') {
+                            _selectedMicroId = n.data.id;
+                            _showDetail(n.data);
+                            _render();
+                        }
+                    });
+                })(node);
+                root.appendChild(g);
+            }
+
+            // ── Detail Panel ──
+            function _showDetailEmpty() {
+                var empty = document.getElementById('stDetailEmpty');
+                var content = document.getElementById('stDetailContent');
+                if (empty) empty.style.display = '';
+                if (content) { content.style.display = 'none'; content.innerHTML = ''; }
+            }
+
+            function _showDetail(micro) {
+                var empty = document.getElementById('stDetailEmpty');
+                var content = document.getElementById('stDetailContent');
+                if (empty) empty.style.display = 'none';
+                if (!content) return;
+                content.style.display = '';
+                var statusCls = micro.status === 'done' ? 'st-status-done' : 'st-status-open';
+                var statusLabel = micro.status === 'done' ? '✓ Tamamlandı' : '○ Açık';
+                var html = '';
+                // Status + ID
+                html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">';
+                html += '<span class="st-status-badge ' + statusCls + '">' + statusLabel + '</span>';
+                html += '<span class="st-detail-id">' + _escHtml(micro.id) + '</span>';
+                html += '</div>';
+                // Title
+                html += '<div class="st-detail-title">' + _escHtml(micro.title) + '</div>';
+                // Description
+                html += '<div class="st-detail-desc">' + _escHtml(micro.description) + '</div>';
+                // Acceptance Criteria (ALWAYS visible — anti-hallucination)
+                html += '<div class="st-ac-box">';
+                html += '<div class="st-ac-label">🎯 KABUL KRİTERİ</div>';
+                html += '<div class="st-ac-text">' + _escHtml(micro.acceptance_criteria) + '</div>';
+                html += '</div>';
+                // Dependencies
+                if (micro.dependencies && micro.dependencies.length > 0) {
+                    html += '<div class="st-detail-section">';
+                    html += '<div class="st-detail-section-title">Bağımlılıklar</div>';
+                    html += '<ul class="st-dep-list">';
+                    for (var d = 0; d < micro.dependencies.length; d++) {
+                        var depId = micro.dependencies[d];
+                        var depInfo = _microIndex[depId];
+                        var depDone = depInfo && depInfo.micro.status === 'done';
+                        html += '<li class="' + (depDone ? 'st-dep-done' : '') + '">';
+                        html += _escHtml(depInfo ? depInfo.micro.title : depId);
+                        html += '</li>';
+                    }
+                    html += '</ul></div>';
+                }
+                // Evidence section
+                html += '<div class="st-evidence-box">';
+                html += '<div class="st-evidence-label">📎 KANIT (' + _escHtml(micro.evidence_type) + ')</div>';
+                if (micro.status === 'done' && micro.evidence) {
+                    // Show submitted evidence
+                    var evText = micro.evidence.text || micro.evidence.file_path || micro.evidence.url || '';
+                    if (micro.evidence.metric_value !== undefined && micro.evidence.metric_value !== null) {
+                        evText = String(micro.evidence.metric_value);
+                    }
+                    html += '<div style="font-size:13px;color:rgba(255,255,255,.6);padding:8px 0">' + _escHtml(evText || '(kanıt mevcut)') + '</div>';
+                } else {
+                    // Evidence input
+                    var placeholders = { text: 'Metin kanıtı girin...', file: 'Dosya yolu girin...', url: 'URL girin...', metric: 'Metrik değeri girin...' };
+                    var inputType = micro.evidence_type === 'metric' ? 'number' : 'text';
+                    var tag = micro.evidence_type === 'text' ? 'textarea' : 'input';
+                    if (tag === 'textarea') {
+                        html += '<textarea class="st-evidence-input" id="stEvidenceInput" placeholder="' + (placeholders[micro.evidence_type] || 'Kanıt girin...') + '" rows="3"></textarea>';
+                    } else {
+                        html += '<input class="st-evidence-input" id="stEvidenceInput" type="' + inputType + '" placeholder="' + (placeholders[micro.evidence_type] || 'Kanıt girin...') + '">';
+                    }
+                }
+                html += '</div>';
+                // Done button
+                if (micro.status !== 'done') {
+                    html += '<button class="st-done-btn st-btn-enabled" id="stDoneBtn" onclick="SkillTree.requestStatusChange(\'' + _escAttr(micro.id) + '\')">✓ Tamamla</button>';
+                    html += '<div id="stDoneError" style="display:none;margin-top:8px;padding:10px 14px;border-radius:10px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.15);font-size:12px;color:#f87171"></div>';
+                }
+                content.innerHTML = html;
+            }
+
+            function _escHtml(s) {
+                if (!s) return '';
+                return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            }
+            function _escAttr(s) {
+                return _escHtml(s).replace(/'/g, '&#39;');
+            }
+
+            // ── Status Change via EventBridge ──
+            function requestStatusChange(microId) {
+                if (!_tree || !_microIndex[microId]) return;
+                var micro = _microIndex[microId].micro;
+                if (micro.status === 'done') return;
+                // Collect evidence from input
+                var inputEl = document.getElementById('stEvidenceInput');
+                var rawVal = inputEl ? inputEl.value.trim() : '';
+                var evidence = {};
+                if (micro.evidence_type === 'text') evidence.text = rawVal;
+                else if (micro.evidence_type === 'file') evidence.file_path = rawVal;
+                else if (micro.evidence_type === 'url') evidence.url = rawVal;
+                else if (micro.evidence_type === 'metric') {
+                    var num = parseFloat(rawVal);
+                    evidence.metric_value = isNaN(num) ? undefined : num;
+                }
+                // Client-side validation
+                var errors = _validateLocal(micro, evidence);
+                if (errors.length > 0) {
+                    var errDiv = document.getElementById('stDoneError');
+                    if (errDiv) {
+                        errDiv.style.display = '';
+                        errDiv.innerHTML = errors.join('<br>');
+                    }
+                    return;
+                }
+                // Send to C++ backend
+                var btn = document.getElementById('stDoneBtn');
+                if (btn) { btn.className = 'st-done-btn st-btn-disabled'; btn.textContent = 'Doğrulanıyor...'; }
+                try {
+                    window.chrome.webview.postMessage({
+                        type: 'MicroTaskStatusChangeRequested',
+                        sessionId: _tree.session_id,
+                        requestId: 'req-st-' + Date.now(),
+                        ts: new Date().toISOString(),
+                        payload: {
+                            interviewSessionId: _tree.session_id,
+                            microTaskId: microId,
+                            newStatus: 'done',
+                            evidence: evidence
+                        }
+                    });
+                } catch(e) {
+                    console.warn('[SkillTree] postMessage failed:', e);
+                    if (btn) { btn.className = 'st-done-btn st-btn-enabled'; btn.textContent = '✓ Tamamla'; }
+                }
+            }
+
+            function _validateLocal(micro, evidence) {
+                var errs = [];
+                if (!micro.acceptance_criteria || micro.acceptance_criteria.trim() === '') {
+                    errs.push('⚠ Kabul kriteri tanımlı değil.');
+                }
+                if (!evidence) {
+                    errs.push('📎 Kanıt gerekli.');
+                } else {
+                    if (micro.evidence_type === 'text' && (!evidence.text || evidence.text.trim() === '')) errs.push('📝 Metin kanıtı boş.');
+                    if (micro.evidence_type === 'file' && (!evidence.file_path || evidence.file_path.trim() === '')) errs.push('📁 Dosya yolu gerekli.');
+                    if (micro.evidence_type === 'url' && (!evidence.url || evidence.url.trim() === '')) errs.push('🔗 URL gerekli.');
+                    if (micro.evidence_type === 'metric' && (evidence.metric_value === undefined || evidence.metric_value === null || isNaN(evidence.metric_value))) errs.push('📊 Metrik değeri gerekli.');
+                }
+                // Check dependencies
+                if (micro.dependencies && micro.dependencies.length > 0) {
+                    for (var i = 0; i < micro.dependencies.length; i++) {
+                        var dep = _microIndex[micro.dependencies[i]];
+                        if (dep && dep.micro.status !== 'done') {
+                            errs.push('🔒 Bağımlı görev tamamlanmadı: ' + (dep.micro.title || dep.micro.id));
+                        }
+                    }
+                }
+                return errs;
+            }
+
+            // ── Backend Response Handlers ──
+            function _handleStatusChanged(payload) {
+                if (!_tree || !payload) return;
+                var id = payload.microTaskId;
+                if (!_microIndex[id]) return;
+                // Update local state
+                _microIndex[id].micro.status = 'done';
+                if (payload.evidence) _microIndex[id].micro.evidence = payload.evidence;
+                // Re-layout edges (done state changed)
+                _layout();
+                _render();
+                _updateProgress();
+                // Refresh detail if this micro is selected
+                if (_selectedMicroId === id) {
+                    _showDetail(_microIndex[id].micro);
+                }
+            }
+
+            function _handleStatusChangeFailed(payload) {
+                if (!payload) return;
+                var errDiv = document.getElementById('stDoneError');
+                var btn = document.getElementById('stDoneBtn');
+                if (btn) { btn.className = 'st-done-btn st-btn-enabled'; btn.textContent = '✓ Tamamla'; }
+                if (errDiv && payload.errors) {
+                    errDiv.style.display = '';
+                    var msgs = [];
+                    for (var i = 0; i < payload.errors.length; i++) {
+                        msgs.push('⚠ ' + (payload.errors[i].message || payload.errors[i].code));
+                    }
+                    errDiv.innerHTML = msgs.join('<br>');
+                }
+            }
+
+            // ── Progress ──
+            function _updateProgress() {
+                if (!_tree) return;
+                var total = 0, done = 0;
+                for (var k in _microIndex) {
+                    total++;
+                    if (_microIndex[k].micro.status === 'done') done++;
+                }
+                var badge = document.getElementById('stProgressBadge');
+                var label = document.getElementById('stProgressLabel');
+                if (badge) badge.style.display = total > 0 ? '' : 'none';
+                if (label) label.textContent = done + ' / ' + total + ' tamamlandı';
+            }
+
+            // ── Pan & Zoom ──
+            function onDragStart(e) {
+                if (e.target.closest('.st-node-major,.st-node-minor,.st-node-micro')) return;
+                _dragging = true;
+                _dragStart = { x: e.clientX, y: e.clientY };
+                _panStart = { x: _pan.x, y: _pan.y };
+            }
+            function onDragMove(e) {
+                if (!_dragging) return;
+                _pan.x = _panStart.x + (e.clientX - _dragStart.x);
+                _pan.y = _panStart.y + (e.clientY - _dragStart.y);
+                _render();
+            }
+            function onDragEnd() { _dragging = false; }
+            function onWheel(e) {
+                e.preventDefault();
+                var factor = e.deltaY < 0 ? 1.08 : 0.93;
+                zoom(factor, e.clientX, e.clientY);
+            }
+
+            function zoom(factor, cx, cy) {
+                var wrap = document.getElementById('stCanvasWrap');
+                if (!wrap) return;
+                var rect = wrap.getBoundingClientRect();
+                if (cx === undefined) { cx = rect.left + rect.width / 2; cy = rect.top + rect.height / 2; }
+                var wx = (cx - rect.left - _pan.x) / _scale;
+                var wy = (cy - rect.top - _pan.y) / _scale;
+                _scale *= factor;
+                _scale = Math.max(0.05, Math.min(5, _scale));
+                _pan.x = (cx - rect.left) - wx * _scale;
+                _pan.y = (cy - rect.top) - wy * _scale;
+                _render();
+            }
+
+            function resetView() {
+                _pan = { x: 20, y: 20 };
+                _scale = 1;
+                _render();
+            }
+
+            function getTree() { return _tree; }
+
+            // ═══════════════════════════════════════════════════════════
+            // Replan: overlay, progress, atomic swap, diff panel
+            // ═══════════════════════════════════════════════════════════
+            var _replanInProgress = false;
+            var _replanProgressTimer = null;
+            var _lastDiff = null;
+
+            function requestReplan(reason, changedSlots) {
+                if (_replanInProgress || !_tree) return;
+                _replanInProgress = true;
+                _showReplanOverlay(true);
+                try {
+                    window.chrome.webview.postMessage({
+                        type: 'ReplanRequested',
+                        sessionId: _tree.session_id,
+                        requestId: 'req-replan-' + Date.now(),
+                        ts: new Date().toISOString(),
+                        payload: {
+                            interviewSessionId: _tree.session_id,
+                            reason: reason || 'manual',
+                            changedSlots: changedSlots || {}
+                        }
+                    });
+                } catch(e) {
+                    console.warn('[SkillTree] replan postMessage failed:', e);
+                    _replanInProgress = false;
+                    _showReplanOverlay(false);
+                }
+            }
+
+            function _showReplanOverlay(show) {
+                var overlay = document.getElementById('stReplanOverlay');
+                var bar = document.getElementById('stReplanBar');
+                if (!overlay) return;
+                if (show) {
+                    overlay.classList.add('st-visible');
+                    // Animated progress bar (indeterminate feel)
+                    var pct = 0;
+                    if (bar) bar.style.width = '0%';
+                    clearInterval(_replanProgressTimer);
+                    _replanProgressTimer = setInterval(function() {
+                        pct += Math.random() * 12 + 3;
+                        if (pct > 90) pct = 90;
+                        if (bar) bar.style.width = pct + '%';
+                    }, 300);
+                } else {
+                    // Complete the bar then hide
+                    clearInterval(_replanProgressTimer);
+                    if (bar) bar.style.width = '100%';
+                    setTimeout(function() {
+                        overlay.classList.remove('st-visible');
+                        if (bar) bar.style.width = '0%';
+                    }, 400);
+                }
+            }
+
+            function _handleReplanCompleted(payload) {
+                _replanInProgress = false;
+                _showReplanOverlay(false);
+                if (!payload || !payload.goalTree) return;
+
+                // Atomic swap: build new state off-screen then swap in one go
+                var newTree = payload.goalTree;
+                var savedPan = { x: _pan.x, y: _pan.y };
+                var savedScale = _scale;
+                var savedSelected = _selectedMicroId;
+
+                // Load new tree (this resets pan/scale)
+                loadTree(newTree);
+
+                // Restore viewport so the user doesn't lose context
+                _pan = savedPan;
+                _scale = savedScale;
+
+                // Re-select the same micro if it still exists
+                if (savedSelected && _microIndex[savedSelected]) {
+                    _selectedMicroId = savedSelected;
+                    _showDetail(_microIndex[savedSelected].micro);
+                }
+
+                _render();
+
+                // Show diff panel
+                if (payload.diff) {
+                    _lastDiff = payload.diff;
+                    _showDiffPanel(payload.diff);
+                }
+
+                // Persist
+                try { localStorage.setItem('vigilant-goaltree', JSON.stringify(newTree)); } catch(e) {}
+            }
+
+            function _handleReplanFailed(payload) {
+                _replanInProgress = false;
+                _showReplanOverlay(false);
+                console.error('[SkillTree] Replan failed:', payload);
+                // Show error in diff panel area
+                var panel = document.getElementById('stDiffPanel');
+                if (panel) {
+                    panel.classList.add('st-visible');
+                    panel.innerHTML = '<div class="st-diff-title">⚠ REPLAN HATASI</div>' +
+                        '<div style="color:#f87171;font-size:12px">' +
+                        _escHtml((payload.error || 'Bilinmeyen hata') + ' [' + (payload.code || '') + ']') +
+                        '</div>';
+                    // Auto-hide after 8s
+                    setTimeout(function() { panel.classList.remove('st-visible'); }, 8000);
+                }
+            }
+
+            function _showDiffPanel(diff) {
+                var panel = document.getElementById('stDiffPanel');
+                if (!panel || !diff) return;
+                var html = '<div class="st-diff-title">📊 DEĞIŞIKLIK RAPORU</div>';
+                // Entries
+                var entries = diff.entries || [];
+                var maxShow = 20;
+                for (var i = 0; i < Math.min(entries.length, maxShow); i++) {
+                    var e = entries[i];
+                    var badgeCls = e.change === 'added' ? 'st-diff-added' :
+                                   e.change === 'removed' ? 'st-diff-removed' : 'st-diff-changed';
+                    var label = e.change === 'added' ? 'YENİ' :
+                                e.change === 'removed' ? 'SİLİNDİ' : 'DEĞİŞTİ';
+                    html += '<div class="st-diff-entry">';
+                    html += '<span class="st-diff-badge ' + badgeCls + '">' + label + '</span>';
+                    html += '<span style="color:rgba(255,255,255,.5)">[' + _escHtml(e.type) + ']</span> ';
+                    html += '<span>' + _escHtml(e.title || e.id) + '</span>';
+                    if (e.changedFields && e.changedFields.length) {
+                        html += '<span style="color:rgba(255,255,255,.3);margin-left:4px">(' + e.changedFields.join(', ') + ')</span>';
+                    }
+                    html += '</div>';
+                }
+                if (entries.length > maxShow) {
+                    html += '<div style="color:rgba(255,255,255,.3);padding:4px 0">...ve ' + (entries.length - maxShow) + ' daha</div>';
+                }
+                // Summary
+                var s = diff.summary || {};
+                html += '<div class="st-diff-summary">';
+                html += '➕ ' + (s.added || 0) + ' eklendi  •  ';
+                html += '➖ ' + (s.removed || 0) + ' silindi  •  ';
+                html += '✏️ ' + (s.changed || 0) + ' değişti  •  ';
+                html += '👻 ' + (s.orphaned || 0) + ' yetim  •  ';
+                html += '✓ ' + (s.preserved || 0) + ' korundu';
+                html += '</div>';
+                // Close button
+                html += '<div style="margin-top:6px;text-align:right"><button onclick="document.getElementById(\'stDiffPanel\').classList.remove(\'st-visible\')" style="background:none;border:1px solid rgba(255,255,255,.1);border-radius:6px;color:rgba(255,255,255,.4);font-size:10px;padding:3px 10px;cursor:pointer">Kapat</button></div>';
+                panel.innerHTML = html;
+                panel.classList.add('st-visible');
+                // Auto-hide after 15s
+                setTimeout(function() { panel.classList.remove('st-visible'); }, 15000);
+            }
+
+            function getLastDiff() { return _lastDiff; }
+
+            return {
+                init: init,
+                loadTree: loadTree,
+                requestStatusChange: requestStatusChange,
+                requestReplan: requestReplan,
+                zoom: zoom,
+                resetView: resetView,
+                getTree: getTree,
+                getLastDiff: getLastDiff
+            };
+        })();
+
+        // Init SkillTree when DOM ready
+        SkillTree.init();
+
+        // Global helpers called from HTML
+        function stLoadGoalTree() {
+            // Try to load from the most recent GoalTree in localStorage or request from backend
+            var stored = null;
+            try { stored = localStorage.getItem('vigilant-goaltree'); } catch(e) {}
+            if (stored) {
+                try {
+                    var parsed = JSON.parse(stored);
+                    if (parsed && parsed.majors) { SkillTree.loadTree(parsed); return; }
+                } catch(e) {}
+            }
+            // If no local tree, request from backend
+            try {
+                window.chrome.webview.postMessage({
+                    type: 'GetLatestGoalTree',
+                    sessionId: '',
+                    requestId: 'req-load-' + Date.now(),
+                    ts: new Date().toISOString(),
+                    payload: {}
+                });
+            } catch(e) { console.warn('[SkillTree] No GoalTree available'); }
+        }
+        function stZoom(factor) { SkillTree.zoom(factor); }
+        function stResetView() { SkillTree.resetView(); }
+        function stRequestReplan() { SkillTree.requestReplan('manual'); }
+
+        // Store GoalTree when generated (hook into existing message handler)
+        (function() {
+            if (!window.chrome || !window.chrome.webview) return;
+            window.chrome.webview.addEventListener('message', function(e) {
+                var d = e.data;
+                if (d && d.type === 'GoalTreeGenerated' && d.payload && d.payload.goalTree) {
+                    try { localStorage.setItem('vigilant-goaltree', JSON.stringify(d.payload.goalTree)); } catch(e) {}
+                }
+                // Also store after successful status change
+                if (d && d.type === 'MicroTaskStatusChanged') {
+                    var tree = SkillTree.getTree();
+                    if (tree) {
+                        try { localStorage.setItem('vigilant-goaltree', JSON.stringify(tree)); } catch(e) {}
+                    }
+                }
+                // Store diff for debug inspection
+                if (d && d.type === 'ReplanCompleted' && d.payload && d.payload.diff) {
+                    try { localStorage.setItem('vigilant-goaltree-lastdiff', JSON.stringify(d.payload.diff)); } catch(e) {}
+                }
+            });
+        })();
+
+        // =============================================
+        // Persistent Ambiance Engine + Splash dismiss
+        // =============================================
+        // PS5-inspired warm ambient drone.
+        // Exposes window._vigilantAmbiance API for Settings UI.
+        // Persists enabled/volume state in localStorage.
+        // Mutes when the window loses focus OR visibility.
+        // =============================================
+        (function() {
+            var splash = document.getElementById('splashOverlay');
+
+            var SPLASH_VOL  = 0.12;   // gentle splash intro volume
+            var MAX_BG_VOL  = 0.035;  // very soft continuous background
+            var FADE_SEC    = 2.0;    // slow, organic transitions
+
+            // ── Restore saved preferences ──
+            var savedEnabled = localStorage.getItem('vigilant-ambiance-enabled');
+            var savedVol     = localStorage.getItem('vigilant-ambiance-vol');
+            var enabled  = savedEnabled !== '0';
+            var volPct   = savedVol !== null ? parseInt(savedVol, 10) : 50;
+            if (isNaN(volPct) || volPct < 0) volPct = 0;
+            if (volPct > 100) volPct = 100;
+
+            var actx = null, master = null;
+            var splashPhase = true;
+            var appInForeground = true; // tracks focus + visibility
+
+            function pctToGain(pct) { return (pct / 100) * MAX_BG_VOL; }
+            function currentBgVol()  { return pctToGain(volPct); }
+
+            function buildAmbiance() {
+                try {
+                    var AC = window.AudioContext || window.webkitAudioContext;
+                    if (!AC) return;
+                    actx = new AC();
+                    var now = actx.currentTime;
+
+                    // ── Master gain ──
+                    master = actx.createGain();
+                    master.gain.setValueAtTime(0, now);
+                    master.gain.linearRampToValueAtTime(SPLASH_VOL, now + 2.0);
+                    master.connect(actx.destination);
+
+                    // ── Breathing LFO – slow gain modulation for organic feel ──
+                    var lfo = actx.createOscillator();
+                    lfo.type = 'sine';
+                    lfo.frequency.value = 0.12; // ~8s per cycle
+                    var lfoG = actx.createGain();
+                    lfoG.gain.value = 0.008; // very subtle ±0.008
+                    lfo.connect(lfoG).connect(master.gain);
+                    lfo.start(now);
+
+                    // ── Soft sub warmth (C2 ~ 65.4 Hz) ──
+                    var sub = actx.createOscillator();
+                    sub.type = 'sine';
+                    sub.frequency.value = 65.41;
+                    var subG = actx.createGain();
+                    subG.gain.value = 0.18;
+                    sub.connect(subG).connect(master);
+                    sub.start(now);
+
+                    // ── Fundamental pad (C3 ~ 130.8 Hz) – two sine, slow chorus ──
+                    var p1 = actx.createOscillator();
+                    p1.type = 'sine'; p1.frequency.value = 130.81; p1.detune.value = -3;
+                    var p2 = actx.createOscillator();
+                    p2.type = 'sine'; p2.frequency.value = 130.81; p2.detune.value = 3;
+                    var padG = actx.createGain();
+                    padG.gain.value = 0.14;
+                    p1.connect(padG); p2.connect(padG);
+                    padG.connect(master);
+                    p1.start(now); p2.start(now);
+
+                    // ── Perfect fifth harmony (G3 ~ 196 Hz) ──
+                    var fifth = actx.createOscillator();
+                    fifth.type = 'sine';
+                    fifth.frequency.value = 196.0;
+                    var fifthG = actx.createGain();
+                    fifthG.gain.value = 0.08;
+                    fifth.connect(fifthG).connect(master);
+                    fifth.start(now);
+
+                    // ── Gentle octave touch (C4 ~ 261.6 Hz) – slow fade-in ──
+                    var oct = actx.createOscillator();
+                    oct.type = 'sine';
+                    oct.frequency.value = 261.63;
+                    var octG = actx.createGain();
+                    octG.gain.setValueAtTime(0, now);
+                    octG.gain.linearRampToValueAtTime(0.04, now + 4);
+                    oct.connect(octG).connect(master);
+                    oct.start(now);
+
+                    // ── Distant wind – very soft filtered noise ──
+                    var bufSize = actx.sampleRate * 2;
+                    var noiseBuf = actx.createBuffer(1, bufSize, actx.sampleRate);
+                    var nd = noiseBuf.getChannelData(0);
+                    for (var i = 0; i < bufSize; i++) nd[i] = Math.random() * 2 - 1;
+                    var noise = actx.createBufferSource();
+                    noise.buffer = noiseBuf; noise.loop = true;
+                    var lp = actx.createBiquadFilter();
+                    lp.type = 'lowpass'; lp.frequency.value = 120; lp.Q.value = 0.7;
+                    var noiseG = actx.createGain();
+                    noiseG.gain.value = 0.025;
+                    noise.connect(lp).connect(noiseG).connect(master);
+                    noise.start(now);
+
+                } catch(e) { actx = null; master = null; }
+            }
+
+            function fadeToVolume(vol, sec) {
+                if (!actx || !master) return;
+                var t = actx.currentTime;
+                master.gain.cancelScheduledValues(t);
+                master.gain.setValueAtTime(master.gain.value, t);
+                master.gain.linearRampToValueAtTime(vol, t + (sec || FADE_SEC));
+            }
+
+            function targetVol() { return enabled ? currentBgVol() : 0; }
+
+            // ── Pause / Resume helper ──
+            function muteAndSuspend() {
+                if (!actx) return;
+                appInForeground = false;
+                fadeToVolume(0, 0.6);
+                setTimeout(function() {
+                    if (!appInForeground && actx && actx.state === 'running') actx.suspend();
+                }, 700);
+            }
+            function resumeToForeground() {
+                if (!actx) return;
+                appInForeground = true;
+                if (splashPhase) return;
+                var vol = targetVol();
+                if (actx.state === 'suspended') {
+                    actx.resume().then(function() { fadeToVolume(vol, FADE_SEC); });
+                } else {
+                    fadeToVolume(vol, FADE_SEC);
+                }
+            }
+
+            // ── Visibility change (minimize, hide to tray) ──
+            document.addEventListener('visibilitychange', function() {
+                if (document.hidden) muteAndSuspend(); else resumeToForeground();
+            });
+
+            // ── Focus / blur (alt-tab, click to another app) ──
+            window.addEventListener('blur', function() { muteAndSuspend(); });
+            window.addEventListener('focus', function() { resumeToForeground(); });
+
+            // ── Public API for Settings UI ──
+            window._vigilantAmbiance = {
+                setEnabled: function(on) {
+                    enabled = !!on;
+                    try { localStorage.setItem('vigilant-ambiance-enabled', enabled ? '1' : '0'); } catch(e) {}
+                    if (splashPhase) return;
+                    if (!enabled) {
+                        fadeToVolume(0, 0.6);
+                        setTimeout(function() {
+                            if (!enabled && actx && actx.state === 'running') actx.suspend();
+                        }, 700);
+                    } else {
+                        if (actx && actx.state === 'suspended') {
+                            actx.resume().then(function() { fadeToVolume(currentBgVol(), FADE_SEC); });
+                        } else {
+                            fadeToVolume(currentBgVol(), FADE_SEC);
+                        }
+                    }
+                },
+                isEnabled: function() { return enabled; },
+                setVolume: function(pct) {
+                    volPct = Math.max(0, Math.min(100, pct));
+                    try { localStorage.setItem('vigilant-ambiance-vol', String(volPct)); } catch(e) {}
+                    if (!splashPhase && enabled && actx) {
+                        fadeToVolume(currentBgVol(), 0.3);
+                    }
+                },
+                getVolume: function() { return volPct; }
+            };
+
+            // ── Start ambiance ──
+            buildAmbiance();
+
+            // Fallback: if Chromium autoplay policy blocked AudioContext,
+            // resume it on the first user interaction.
+            function resumeOnGesture() {
+                if (actx && actx.state === 'suspended') {
+                    actx.resume();
+                }
+                document.removeEventListener('click', resumeOnGesture, true);
+                document.removeEventListener('keydown', resumeOnGesture, true);
+            }
+            document.addEventListener('click', resumeOnGesture, true);
+            document.addEventListener('keydown', resumeOnGesture, true);
+
+            // ── Splash dismiss → transition to user-preferred level ──
+            var SPLASH_DURATION_MS = 4000;
+            setTimeout(function() {
+                splashPhase = false;
+                if (splash) {
+                    splash.classList.add('hidden');
+                    setTimeout(function() { splash.remove(); }, 900);
+                }
+                if (!enabled) {
+                    fadeToVolume(0, FADE_SEC);
+                    setTimeout(function() {
+                        if (!enabled && actx && actx.state === 'running') actx.suspend();
+                    }, 2200);
+                } else {
+                    fadeToVolume(currentBgVol(), FADE_SEC);
+                }
+            }, SPLASH_DURATION_MS);
+        })();
     </script>
+    <!-- Socratic Interview: Floating AI Assistant Widget -->
+    <script src="interview-widget.js"></script>
 </body>
 </html>

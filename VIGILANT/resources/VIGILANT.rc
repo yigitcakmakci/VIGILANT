@@ -1,0 +1,14 @@
+#include "resource.h"
+
+// ── Application Icon ───────────────────────────────────────────
+IDI_VIGILANT ICON "vigilant.ico"
+
+// ── Web assets embedded as RCDATA ──────────────────────────────
+IDR_HTML_DASHBOARD         RCDATA "..\\web\\html\\dashboard_pro.html"
+IDR_CSS_MICRO_INTERACTIONS RCDATA "..\\web\\css\\micro-interactions.css"
+IDR_CSS_FLOW_STATE         RCDATA "..\\web\\css\\flow-state.css"
+IDR_JS_MICRO_INTERACTIONS  RCDATA "..\\web\\js\\micro-interactions.js"
+IDR_JS_MOOD_ENGINE         RCDATA "..\\web\\js\\mood-engine.js"
+IDR_JS_TIMER_SERVICE       RCDATA "..\\web\\js\\timer-service.js"
+IDR_JS_GEMINI_CLIENT       RCDATA "..\\web\\js\\gemini-client.js"
+IDR_JS_INTERVIEW_WIDGET    RCDATA "..\\web\\js\\interview-widget.js"

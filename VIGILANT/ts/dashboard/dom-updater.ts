@@ -127,11 +127,60 @@ export function bootstrapLiveTimer(): TimerService {
                 case 'idleEnd':
                     service.onIdleEnd();
                     break;
+                case 'AiTokenUsageUpdated':
+                    updateTokenOdometer(data.payload);
+                    break;
             }
         });
     }
 
     return service;
+}
+
+// ── Token Odometer ─────────────────────────────────────────────────────
+
+interface TokenUsagePayload {
+    tokensUsedThisRequest: number;
+    dailyTotalTokens: number;
+    dailyLimit: number;
+}
+
+function formatTokenCompact(n: number): string {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
+    return String(n);
+}
+
+function formatTokenNumber(n: number): string {
+    return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+export function updateTokenOdometer(payload: TokenUsagePayload | null): void {
+    if (!payload) return;
+
+    const daily = payload.dailyTotalTokens ?? 0;
+    const limit = payload.dailyLimit ?? 1_000_000;
+    const req = payload.tokensUsedThisRequest ?? 0;
+    const pct = Math.min((daily / limit) * 100, 100);
+
+    const valueEl = document.getElementById('tokenOdometerValue');
+    const fillEl = document.getElementById('tokenBarFill');
+    const reqEl = document.getElementById('tokenOdometerReq');
+    const pctEl = document.getElementById('tokenOdometerPct');
+
+    if (valueEl) valueEl.textContent = `${formatTokenCompact(daily)} / ${formatTokenCompact(limit)}`;
+
+    if (fillEl) {
+        fillEl.style.width = `${pct.toFixed(2)}%`;
+        if (pct >= 80) {
+            fillEl.classList.add('warning');
+        } else {
+            fillEl.classList.remove('warning');
+        }
+    }
+
+    if (reqEl) reqEl.textContent = `Son istek: +${formatTokenNumber(req)}`;
+    if (pctEl) pctEl.textContent = `${pct.toFixed(1)}%`;
 }
 
 // ── Chrome WebView2 type shim ──────────────────────────────────────────

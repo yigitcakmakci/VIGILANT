@@ -59,6 +59,7 @@ static bool RawQueue_Pop(RawHookEvent& evt) {
 HWINEVENTHOOK WindowTracker::hHookForeground = nullptr;
 HWINEVENTHOOK WindowTracker::hHookNameChange = nullptr;
 ULONGLONG WindowTracker::s_lastEventTick = 0;
+std::atomic<bool> WindowTracker::s_paused{false};
 
 // Resolver thread state
 static std::atomic<bool> s_resolverRunning{false};
@@ -224,6 +225,20 @@ void WindowTracker::StopTracking() {
     if (s_resolverThread.joinable()) s_resolverThread.join();
 }
 
+void WindowTracker::PauseTracking() {
+    s_paused.store(true, std::memory_order_release);
+    OutputDebugStringA("[WindowTracker] Tracking PAUSED\n");
+}
+
+void WindowTracker::ResumeTracking() {
+    s_paused.store(false, std::memory_order_release);
+    OutputDebugStringA("[WindowTracker] Tracking RESUMED\n");
+}
+
+bool WindowTracker::IsPaused() {
+    return s_paused.load(std::memory_order_acquire);
+}
+
 // ============================================================================
 // ULTRA-LIGHTWEIGHT CALLBACK
 // Cost: ~3 comparisons + 1 GetTickCount64 + 1 GetForegroundWindow + 1 array write
@@ -234,6 +249,8 @@ void CALLBACK WindowTracker::WinEventProc(
     LONG idObject, LONG idChild, DWORD dwEventThread, DWORD dwmsEventTime)
 {
     PERF_COUNT(hook_callback_entered);
+
+    if (s_paused.load(std::memory_order_acquire)) return;
 
     if (idObject != OBJID_WINDOW || idChild != CHILDID_SELF) return;
     if (!hwnd) return;
