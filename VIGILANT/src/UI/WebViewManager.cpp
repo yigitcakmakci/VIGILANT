@@ -4,6 +4,7 @@
 #include "Data/DatabaseManager.hpp"
 #include "AI/GeminiService.hpp"
 #include "AI/InterviewHandler.hpp"
+#include "AI/GoalManager.hpp"
 #include "AI/AutoTickerMatcher.hpp"
 #include "AI/AutoTickerVerifier.hpp"
 #include "AI/AutoTickerTickEngine.hpp"
@@ -23,6 +24,9 @@ static AutoTickerVersionGuard g_VersionGuard;
 
 // ── Socratic Interview handler (singleton, lazily uses g_Gemini + g_Vault) ──
 static InterviewHandler g_InterviewHandler(&g_Gemini, &g_Vault);
+
+// ── GoalManager: multi-goal forest manager ──
+static GoalManager g_GoalManager(&g_Vault);
 
 // --- Narrative Input Builder ---
 // Mevcut WindowTracker ve veritabani verilerini kullanarak
@@ -256,6 +260,8 @@ bool WebViewManager::Initialize() {
                                             { L"timer-service.js",       IDR_JS_TIMER_SERVICE,       L"application/javascript; charset=utf-8" },
                                             { L"gemini-client.js",       IDR_JS_GEMINI_CLIENT,       L"application/javascript; charset=utf-8" },
                                             { L"interview-widget.js",    IDR_JS_INTERVIEW_WIDGET,    L"application/javascript; charset=utf-8" },
+                                            { L"goal-tree-bundle.js",    IDR_JS_GOAL_TREE_BUNDLE,    L"application/javascript; charset=utf-8" },
+                                                                                        { L"goals-chat-bundle.js",   IDR_JS_GOALS_CHAT_BUNDLE,   L"application/javascript; charset=utf-8" },
                                         };
 
                                         for (const auto& m : kMap) {
@@ -924,6 +930,45 @@ std::string WebViewManager::HandleMessage(const std::string& message) {
             }
             response = g_InterviewHandler.HandleMicroTaskStatusChange(
                 requestId, interviewSessionId, microTaskId, newStatus, evidenceJson);
+        }
+        // ── GoalForest: RemoveGoalRequested ──
+        else if (message.find("RemoveGoalRequested") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] RemoveGoalRequested istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string goalRootId;
+            if (!j.is_discarded() && j.contains("payload") && j["payload"].contains("goalRootId"))
+                goalRootId = j["payload"]["goalRootId"].get<std::string>();
+
+            bool removed = g_GoalManager.removeGoal(goalRootId);
+
+            nlohmann::json resp;
+            resp["type"]      = "GoalRemoved";
+            resp["requestId"] = requestId;
+            resp["ts"]        = j.value("ts", "");
+            resp["payload"]   = {
+                {"goalRootId", goalRootId},
+                {"success",    removed}
+            };
+            response = resp.dump();
+        }
+        // ── GoalsChat: Start ──
+        else if (message.find("GoalsChatStartRequested") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] GoalsChatStartRequested alindi\n");
+            response = g_InterviewHandler.HandleGoalsChatStart(requestId);
+        }
+        // ── GoalsChat: Message ──
+        else if (message.find("GoalsChatMessageSubmitted") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] GoalsChatMessageSubmitted alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string sessionId, text;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                if (p.contains("sessionId"))
+                    sessionId = p["sessionId"].get<std::string>();
+                if (p.contains("text"))
+                    text = p["text"].get<std::string>();
+            }
+            response = g_InterviewHandler.HandleGoalsChatMessage(requestId, sessionId, text);
         }
         // ── GoalTree: ReplanRequested ──
         else if (message.find("ReplanRequested") != std::string::npos) {

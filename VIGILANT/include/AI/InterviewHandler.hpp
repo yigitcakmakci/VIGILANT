@@ -59,6 +59,12 @@ public:
                                      const std::string& reason,
                                      const nlohmann::json& changedSlots);
 
+    // ── Goals Chat: Socratic planner embedded in Goals tab ───────────
+    std::string HandleGoalsChatStart(const std::string& requestId);
+    std::string HandleGoalsChatMessage(const std::string& requestId,
+                                       const std::string& sessionId,
+                                       const std::string& text);
+
 private:
     std::string generateUUID() const;
     std::string nowISO() const;
@@ -72,6 +78,7 @@ private:
     DatabaseManager*                     m_vault;
     std::unique_ptr<InterviewSession>    m_session;
     std::unique_ptr<InterviewSlotFiller> m_slotFiller;
+    nlohmann::json                       m_lastStoredResult; // in-memory cache of storedResult+goalTree
     std::mutex                           m_mutex;
 };
 

@@ -823,4 +823,301 @@ inline GoalTree goalTreeFromJson(const nlohmann::json& j) {
 
 } // namespace GoalTreeSerializer
 
+// ═══════════════════════════════════════════════════════════════════════
+// GoalNode — Recursive Dynamic Goal Tree (n-depth)
+//
+// Replaces the static Major → Minor → Micro hierarchy with a single
+// self-referencing node.  Depth is determined dynamically by the AI
+// based on goal complexity (2 for simple, up to 6 for epic goals).
+//
+// INVARIANT:
+//   Every leaf (isLeaf == true)  → acceptanceCriteria non-empty.
+//   Every branch (isLeaf == false) → children non-empty.
+//
+// Mirrors TypeScript GoalNode in ts/interview/goal-tree-types.ts.
+// ═══════════════════════════════════════════════════════════════════════
+
+struct ActionItem {
+    std::string text;
+    bool        isCompleted = false;
+};
+
+struct GoalNode {
+    std::string              id;
+    std::string              title;
+    std::string              description;
+    int                      progress = 0;       // 0-100
+    bool                     isLeaf   = false;
+    std::string              acceptanceCriteria;  // required when isLeaf
+    std::vector<GoalNode>    children;
+    std::vector<ActionItem>  actionItems;         // atomic action steps
+};
+
+struct DynamicGoalTree {
+    int                      version = 2;
+    std::string              session_id;
+    std::string              generated_at;   // ISO-8601
+    GoalNode                 root;
+    std::string              version_id;
+    std::string              parent_version;
+    std::string              created_ts;
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+// Dynamic Goal Tree — AI System Prompt
+// ═══════════════════════════════════════════════════════════════════════
+
+namespace DynamicGoalTreePrompt {
+
+inline const std::string SYSTEM_PROMPT = R"PROMPT(Sen bir hedef analiz ve decomposition uzmanısın.
+
+# GÖREVİN
+Kullanıcının hedefini analiz et ve onu özyinelemeli (recursive) bir GoalNode ağacına dönüştür.
+Ağacın derinliği hedefin büyüklüğüne, karmaşıklığına VE kullanıcının mülakatında belirttiği
+zaman kısıtına göre dinamik olarak belirlenecek. Bu kararı SEN otonom olarak vermelisin.
+
+# DERİNLİK KURALLARI (Otonom Karar)
+- Kısa vadeli hedef (1-4 hafta): 2-3 seviye yeterli.
+- Orta vadeli hedef (1-6 ay): 3-4 seviye.
+- Uzun vadeli veya teknik hedef (6+ ay): 4-6 seviye.
+- KESİNLİKLE 7 seviyeyi geçme.
+  Son yapraklar (isLeaf: true) günlük veya haftalık SPESİFİK, ölçülebilir aksiyonlar olmalı.
+
+# HİPER-KİŞİSELLEŞTİRME KURALLARI
+- Mülakatın başında sana "MULAKAT VERILERI" bloğu sağlanacak.
+  Bu veriler kullanıcının kendi kelimeleriyle ifade ettiği yanıtlardır.
+- Her GoalNode'un title, description ve acceptanceCriteria alanlarında
+  kullanıcının mülakatında geçen SPESİFİK kelimeleri, araçları, süreleri
+  ve değerleri BİREBİR kullan.
+- ASLA statik şablon veya genel ifade kullanma.
+  Her ağaç, o mülakatın benzersiz bir yansıması olmalıdır.
+- Kullanıcı hangi araç/kaynak/platform belirttiyse, adımları onlar
+  üzerinden kurgula.
+- Kullanıcı seviyesini belirttiyse, ilk dalları o seviyeye uygun
+  basitlikte veya karmaşıklıkta tasarla.
+
+# GoalNode ŞEMASI
+{
+  "id":                 string,   // deterministik: "node-0", "node-0-1", "node-0-1-2", ...
+  "title":              string,   // kısa, eyleme dönük başlık — mülakatın kelimeleriyle
+  "description":        string,   // 1-2 cümle açıklama — kullanıcının verdiği bağlama özel
+  "progress":           number,   // 0-100 (yeni ağaçta tüm düğümler 0)
+  "isLeaf":             boolean,  // true = aksiyon yapılabilir yaprak görev
+  "acceptanceCriteria": string,   // SADECE isLeaf===true ise ZORUNLU ve boş olamaz.
+                                   // Somut, doğrulanabilir, mülakata dayalı tamamlanma kriteri.
+  "children":           GoalNode[] // isLeaf===false ise ZORUNLU ve en az 1 eleman.
+                                    // isLeaf===true ise bu alan OLMAMALI.
+  "actionItems":        ActionItem[] // isLeaf===true ise ZORUNLU, en az 3 eleman.
+                                      // { "text": string, "isCompleted": false }
+}
+
+# ÇIKTI FORMATI
+Çıktın kesinlikle aşağıdaki JSON yapısında olmalı — başka hiçbir metin, açıklama veya markdown fence ekleme:
+{
+  "version": 2,
+  "session_id": "<verilen session id>",
+  "generated_at": "<ISO-8601 zaman damgası>",
+  "root": { <tek bir GoalNode — ağacın kökü> }
+}
+
+# ATOMİKLİK KURALI (Action Items)
+Bir GoalNode üretirken, özellikle en alt seviyede (isLeaf: true), o görevin nasıl
+yapılacağını anlatan en az 3, en fazla 5 adet atomik aksiyon maddesi (actionItems) ekle.
+Bu maddeler genel ifadeler olmamalı; doğrudan fiziksel veya dijital bir hamle
+tanımlamalıdır. Her actionItem şu formatta olmalı:
+  { "text": "<somut eylem>", "isCompleted": false }
+actionItems dizisi isLeaf===true olan her düğümde ZORUNLUDUR.
+
+# GoalNode ŞEMASI (güncel)
+Yukarıdaki şemaya ek olarak her GoalNode şu alana da sahiptir:
+  "actionItems": ActionItem[]  // isLeaf===true ise ZORUNLU, en az 3 eleman.
+                               // Her eleman: { "text": string, "isCompleted": false }
+
+# KRİTİK KURALLAR
+1. Her yaprak düğümde (isLeaf: true) acceptanceCriteria MUTLAKA dolu olmalı.
+   Bu anti-hallucination mekanizmasıdır — kritersiz görev tamamlanamaz.
+2. Dal düğümlerde (isLeaf: false) acceptanceCriteria OLMAMALI, children OLMALI.
+3. Tüm id değerleri ağaç içinde benzersiz (unique) olmalı.
+4. progress alanı yeni ağaçta her zaman 0 olacak.
+5. Yaprak görevler somut, spesifik ve 1-3 gün içinde tamamlanabilir olmalı.
+6. Promptlarin icinde asla spesifik hedeflere dair ornekler verme. Sistem evrensel olmali.
+7. Her yaprak düğümde actionItems dizisi en az 3, en fazla 5 atomik madde içermeli.
+8. Türkçe yaz.)PROMPT";
+
+} // namespace DynamicGoalTreePrompt
+
+// ═══════════════════════════════════════════════════════════════════════
+// DynamicGoalTree Validation (recursive)
+// ═══════════════════════════════════════════════════════════════════════
+
+namespace DynamicGoalTreeSchema {
+
+inline GoalTreeValidation fail(const std::string& error, const std::string& path) {
+    return { false, error, path };
+}
+
+inline GoalTreeValidation validateGoalNode(const nlohmann::json& j,
+                                           const std::string& path,
+                                           std::set<std::string>& allIds,
+                                           int depth) {
+    if (!j.is_object())
+        return fail("GoalNode is not an object", path);
+
+    if (depth > 7)
+        return fail("GoalNode tree exceeds maximum depth of 7", path);
+
+    // id
+    if (!j.contains("id") || !j["id"].is_string() || j["id"].get<std::string>().empty())
+        return fail("Missing or empty id", path + ".id");
+
+    std::string id = j["id"].get<std::string>();
+    if (allIds.count(id))
+        return fail("Duplicate node id: \"" + id + "\"", path + ".id");
+    allIds.insert(id);
+
+    // title
+    if (!j.contains("title") || !j["title"].is_string() || j["title"].get<std::string>().empty())
+        return fail("Missing or empty title", path + ".title");
+
+    // description
+    if (!j.contains("description") || !j["description"].is_string())
+        return fail("Missing description", path + ".description");
+
+    // progress
+    if (!j.contains("progress") || !j["progress"].is_number())
+        return fail("Missing or non-numeric progress", path + ".progress");
+    int prog = j["progress"].get<int>();
+    if (prog < 0 || prog > 100)
+        return fail("progress must be 0-100", path + ".progress");
+
+    // isLeaf
+    if (!j.contains("isLeaf") || !j["isLeaf"].is_boolean())
+        return fail("Missing or non-boolean isLeaf", path + ".isLeaf");
+
+    bool isLeaf = j["isLeaf"].get<bool>();
+
+    if (isLeaf) {
+        // Leaf: acceptanceCriteria REQUIRED
+        if (!j.contains("acceptanceCriteria") || !j["acceptanceCriteria"].is_string()
+            || j["acceptanceCriteria"].get<std::string>().empty())
+            return fail("Leaf node: acceptanceCriteria is REQUIRED and must be non-empty "
+                        "(anti-hallucinated progress)", path + ".acceptanceCriteria");
+
+        // Leaf must NOT have children
+        if (j.contains("children") && j["children"].is_array() && !j["children"].empty())
+            return fail("Leaf node must not have children", path + ".children");
+    } else {
+        // Branch: children REQUIRED and non-empty
+        if (!j.contains("children") || !j["children"].is_array())
+            return fail("Branch node: children must be an array", path + ".children");
+        if (j["children"].empty())
+            return fail("Branch node: children must not be empty", path + ".children");
+
+        // Recurse into children
+        for (size_t i = 0; i < j["children"].size(); ++i) {
+            auto v = validateGoalNode(j["children"][i],
+                                      path + ".children[" + std::to_string(i) + "]",
+                                      allIds, depth + 1);
+            if (!v.ok) return v;
+        }
+    }
+
+    return { true, "", "" };
+}
+
+/**
+ * Full DynamicGoalTree validation.  Call on any JSON before accepting
+ * it as a recursive goal tree document.
+ */
+inline GoalTreeValidation validate(const nlohmann::json& j) {
+    if (!j.is_object())
+        return fail("Expected a JSON object", "$");
+
+    if (!j.contains("version") || !j["version"].is_number_integer()
+        || j["version"].get<int>() != 2)
+        return fail("Unsupported version (expected 2)", "$.version");
+
+    if (!j.contains("session_id") || !j["session_id"].is_string()
+        || j["session_id"].get<std::string>().empty())
+        return fail("Missing or empty session_id", "$.session_id");
+
+    if (!j.contains("generated_at") || !j["generated_at"].is_string()
+        || j["generated_at"].get<std::string>().empty())
+        return fail("Missing or empty generated_at", "$.generated_at");
+
+    if (!j.contains("root") || !j["root"].is_object())
+        return fail("Missing or non-object root", "$.root");
+
+    std::set<std::string> allIds;
+    return validateGoalNode(j["root"], "$.root", allIds, 1);
+}
+
+} // namespace DynamicGoalTreeSchema
+
+// ═══════════════════════════════════════════════════════════════════════
+// DynamicGoalTree Serialization: GoalNode struct ↔ JSON
+// ═══════════════════════════════════════════════════════════════════════
+
+namespace DynamicGoalTreeSerializer {
+
+inline nlohmann::json goalNodeToJson(const GoalNode& n) {
+    nlohmann::json j;
+    j["id"]          = n.id;
+    j["title"]       = n.title;
+    j["description"] = n.description;
+    j["progress"]    = n.progress;
+    j["isLeaf"]      = n.isLeaf;
+    if (n.isLeaf) {
+        j["acceptanceCriteria"] = n.acceptanceCriteria;
+    } else {
+        j["children"] = nlohmann::json::array();
+        for (const auto& c : n.children)
+            j["children"].push_back(goalNodeToJson(c));
+    }
+    return j;
+}
+
+inline GoalNode goalNodeFromJson(const nlohmann::json& j) {
+    GoalNode n;
+    n.id          = j.value("id", "");
+    n.title       = j.value("title", "");
+    n.description = j.value("description", "");
+    n.progress    = j.value("progress", 0);
+    n.isLeaf      = j.value("isLeaf", false);
+    n.acceptanceCriteria = j.value("acceptanceCriteria", "");
+    if (j.contains("children") && j["children"].is_array()) {
+        for (const auto& c : j["children"])
+            n.children.push_back(goalNodeFromJson(c));
+    }
+    return n;
+}
+
+inline nlohmann::json dynamicGoalTreeToJson(const DynamicGoalTree& t) {
+    nlohmann::json j;
+    j["version"]      = t.version;
+    j["session_id"]   = t.session_id;
+    j["generated_at"] = t.generated_at;
+    j["root"]         = goalNodeToJson(t.root);
+    if (!t.version_id.empty())      j["version_id"]     = t.version_id;
+    if (!t.parent_version.empty())  j["parent_version"] = t.parent_version;
+    if (!t.created_ts.empty())      j["created_ts"]     = t.created_ts;
+    return j;
+}
+
+inline DynamicGoalTree dynamicGoalTreeFromJson(const nlohmann::json& j) {
+    DynamicGoalTree t;
+    t.version        = j.value("version", 2);
+    t.session_id     = j.value("session_id", "");
+    t.generated_at   = j.value("generated_at", "");
+    t.version_id     = j.value("version_id", "");
+    t.parent_version = j.value("parent_version", "");
+    t.created_ts     = j.value("created_ts", "");
+    if (j.contains("root") && j["root"].is_object()) {
+        t.root = goalNodeFromJson(j["root"]);
+    }
+    return t;
+}
+
+} // namespace DynamicGoalTreeSerializer
+
 #endif // GOAL_TREE_HPP

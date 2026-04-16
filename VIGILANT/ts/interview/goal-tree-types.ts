@@ -101,6 +101,72 @@ export interface GoalTree {
 export type MicroTaskStatusExtended = MicroTaskStatus | 'orphaned';
 
 // ═══════════════════════════════════════════════════════════════════════
+// GoalNode — Recursive Dynamic Goal Tree (n-depth)
+//
+// Replaces the static Major → Minor → Micro hierarchy with a single
+// self-referencing node type.  Depth is determined dynamically by the
+// AI based on goal complexity (2 levels for simple, up to 6 for epic).
+//
+// INVARIANT:
+//   Every leaf node (isLeaf === true) MUST have a non-empty
+//   acceptanceCriteria string (anti-hallucinated progress).
+//   Branch nodes (isLeaf === false) MUST have at least one child.
+// ═══════════════════════════════════════════════════════════════════════
+
+/** Atomic, indivisible action step within a GoalNode. */
+export interface ActionItem {
+    text: string;
+    isCompleted: boolean;
+}
+
+export interface GoalNode {
+    /** Deterministic unique id, e.g. "node-0", "node-0-1", "node-0-1-3" */
+    id: string;
+    title: string;
+    description: string;
+    /** 0–100.  Leaf → manual.  Branch → computed average of children. */
+    progress: number;
+    /** true = actionable leaf task, false = branch / container node */
+    isLeaf: boolean;
+    /**
+     * Verifiable completion criterion.
+     * REQUIRED when isLeaf === true.  Must be non-empty.
+     */
+    acceptanceCriteria?: string;
+    /**
+     * Sub-goals.  Present only when isLeaf === false.
+     * Must contain at least one element for branch nodes.
+     */
+    children?: GoalNode[];
+    /**
+     * Atomic action items for this node (especially leaf nodes).
+     * Each item describes a concrete, indivisible physical or digital action.
+     */
+    actionItems?: ActionItem[];
+}
+
+/** Root wrapper for the recursive dynamic goal tree. */
+export interface DynamicGoalTree {
+    version: 2;
+    session_id: string;
+    generated_at: string;       // ISO-8601
+    root: GoalNode;
+    /** Unique version identifier for this snapshot */
+    version_id?: string;
+    /** version_id of the parent tree this was replanned from */
+    parent_version?: string;
+    /** ISO-8601 timestamp when this version was created */
+    created_ts?: string;
+}
+
+/**
+ * GoalForest — a collection of independent goal trees.
+ * Each element is a DynamicGoalTree wrapper (version 2) or a raw GoalNode root.
+ * Used by the multi-goal accordion renderer.
+ */
+export type GoalForest = DynamicGoalTree[];
+
+// ═══════════════════════════════════════════════════════════════════════
 // GoalTree Diff — tracks changes between two GoalTree versions
 // ═══════════════════════════════════════════════════════════════════════
 

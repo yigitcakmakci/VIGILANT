@@ -49,6 +49,11 @@
                         _updateTokenOdometer(data.payload);
                         return;
                     }
+                    // Mission Control: GoalTreeSummaryUpdated from C++ GoalManager
+                    if (data && data.type === 'GoalTreeSummaryUpdated') {
+                        _renderMissionControl(data.payload);
+                        return;
+                    }
                     var rid = data && data.requestId != null ? String(data.requestId) : null;
                     if (rid && self._pending[rid]) {
                         self._pending[rid](data);
@@ -100,6 +105,10 @@
     <link rel="stylesheet" href="micro-interactions.css">
     <link rel="stylesheet" href="flow-state.css">
     <style>
+        /* ── Goals Chat typing dots ── */
+        @keyframes goalsDotBounce { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-4px)} }
+        .goals-typing-dot { width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,0.25);animation:goalsDotBounce 1s infinite; }
+
         /* ── Mood Engine CSS Variables (driven by mood-engine.js) ── */
         :root {
             --mood-accent: 38 92% 50%;
@@ -194,6 +203,36 @@
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Mission Control Widget ── */
+        .mc-widget { width: 100%; max-width: 480px; margin: 0 auto; padding: 24px 28px; }
+        .mc-header { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 16px; position: relative; }
+        .mc-header svg { width: 16px; height: 16px; color: rgba(255,255,255,.35); }
+        .mc-header h3 { font-size: 13px; font-weight: 500; color: rgba(255,255,255,.4); text-transform: uppercase; letter-spacing: .06em; }
+        .mc-header .mc-count { position: absolute; right: 0; font-size: 11px; color: rgba(255,255,255,.25); }
+        .mc-list { display: flex; flex-direction: column; gap: 10px; }
+        .mc-goal-item { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 12px 16px; border-radius: 12px; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.05); transition: all .3s cubic-bezier(.4,0,.2,1); cursor: default; width: 90%; margin: 0 auto; }
+        .mc-goal-item:hover { background: rgba(255,255,255,.07); }
+        .mc-goal-item.mc-active { background: rgba(167,139,250,.06); border-color: rgba(167,139,250,.18); width: 100%; padding: 14px 18px; box-shadow: 0 0 16px rgba(167,139,250,.06); }
+        .mc-goal-info { flex: 1; min-width: 0; }
+        .mc-goal-title { font-size: 13px; font-weight: 500; color: rgba(255,255,255,.75); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .mc-goal-item.mc-active .mc-goal-title { color: rgba(196,181,253,.85); }
+        .mc-goal-pct { font-size: 11px; font-weight: 500; color: rgba(255,255,255,.3); font-variant-numeric: tabular-nums; flex-shrink: 0; width: 36px; text-align: right; }
+        .mc-goal-item.mc-active .mc-goal-pct { color: rgba(167,139,250,.7); }
+        .mc-bar-track { width: 100%; height: 4px; border-radius: 99px; background: rgba(255,255,255,.06); overflow: hidden; margin-top: 6px; }
+        .mc-bar-fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, #22d3ee, #34d399); transition: width 400ms cubic-bezier(.4,0,.2,1); min-width: 0; }
+        .mc-goal-item.mc-active .mc-bar-fill { background: linear-gradient(90deg, #a78bfa, #c084fc); box-shadow: 0 0 6px rgba(167,139,250,.2); }
+        .mc-actions { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; padding-left: 2px; width: 100%; }
+        .mc-action-chip { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 10px; background: rgba(255,255,255,.02); border: 1px solid rgba(255,255,255,.04); font-size: 12px; color: rgba(255,255,255,.5); line-height: 1.4; transition: all .2s ease; cursor: pointer; user-select: none; }
+        .mc-action-chip:hover { background: rgba(167,139,250,.08); border-color: rgba(167,139,250,.15); }
+        .mc-action-cb { width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid rgba(167,139,250,.4); background: transparent; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all .25s ease; }
+        .mc-action-chip:hover .mc-action-cb { border-color: rgba(167,139,250,.7); }
+        .mc-action-cb svg { width: 10px; height: 10px; opacity: 0; color: #fff; transition: opacity .2s ease; }
+        .mc-action-chip.mc-done .mc-action-cb { background: rgba(52,211,153,.6); border-color: rgba(52,211,153,.6); }
+        .mc-action-chip.mc-done .mc-action-cb svg { opacity: 1; }
+        .mc-action-chip.mc-done { color: rgba(255,255,255,.2); }
+        .mc-action-chip.mc-done .mc-action-text { text-decoration: line-through; }
+        .mc-empty { text-align: center; padding: 16px; font-size: 12px; color: rgba(255,255,255,.2); }
         @keyframes floatingDark {
             0%   { transform: translate(0, 0) scale(1);        opacity: .65; }
             20%  { transform: translate(50px, -60px) scale(1.08);  opacity: .90; }
@@ -1377,6 +1416,18 @@
                 </div>
             </div>
 
+            <!-- Mission Control Widget -->
+            <div class="mc-widget glass-card" id="mcWidget">
+                <div class="mc-header">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+                    <h3>Mission Control</h3>
+                    <span class="mc-count" id="mcGoalCount"></span>
+                </div>
+                <div class="mc-list" id="mcGoalList">
+                    <div class="mc-empty">Henüz hedef yok — Hedefler sekmesinden başlayın.</div>
+                </div>
+            </div>
+
             <!-- Minimalist Footer -->
             <div class="portal-footer">
                 <div class="footer-metric">
@@ -1967,6 +2018,78 @@
                 </div>
             </div>
 
+            <!-- Goals Chat — Strategy Room ──────────────────────────────── -->
+            <div id="goalsChatSection" style="position:relative;margin-bottom:24px">
+                <!-- Header bar -->
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+                    <span style="font-size:11px;font-weight:500;letter-spacing:0.1em;text-transform:uppercase;color:rgba(255,255,255,0.35)">Strateji Odası</span>
+                    <div style="flex:1;height:1px;background:linear-gradient(to right,rgba(255,255,255,0.08),transparent)"></div>
+                    <button id="goalsChatStartBtn" onclick="window._startGoalsChat()"
+                            style="padding:6px 14px;border-radius:8px;background:rgba(99,102,241,0.15);color:rgba(165,180,252,0.9);font-size:12px;font-weight:500;border:1px solid rgba(99,102,241,0.2);cursor:pointer;transition:background 0.2s">
+                        🎯 Yeni Oturum
+                    </button>
+                </div>
+
+                <!-- Chat container -->
+                <div class="glass-card" style="padding:0;overflow:hidden">
+
+                    <!-- Messages area -->
+                    <div id="goalsChatMessages"
+                         style="width:100%;overflow-y:auto;padding:16px;min-height:180px;max-height:360px;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.1) transparent;display:flex;flex-direction:column;gap:8px">
+                        <!-- Placeholder shown when empty -->
+                        <div id="goalsChatPlaceholder" style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 0;user-select:none">
+                            <div style="width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin-bottom:12px;background:linear-gradient(135deg,rgba(99,102,241,0.12),rgba(16,185,129,0.08));border:1px solid rgba(255,255,255,0.05)">
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
+                                </svg>
+                            </div>
+                            <p style="color:rgba(255,255,255,0.2);font-size:15px;font-weight:300">Hedefin nedir?</p>
+                            <p style="color:rgba(255,255,255,0.1);font-size:11px;margin-top:4px">Bir oturum başlatarak hedefinizi birlikte netleştirelim</p>
+                        </div>
+                    </div>
+
+                    <!-- Typing indicator (hidden by default) -->
+                    <div id="goalsChatTyping" style="display:none;padding:0 16px 8px">
+                        <div style="display:flex;align-items:center;gap:6px;color:rgba(255,255,255,0.25);font-size:12px">
+                            <span style="display:inline-flex;gap:3px">
+                                <span class="goals-typing-dot" style="animation-delay:0ms"></span>
+                                <span class="goals-typing-dot" style="animation-delay:150ms"></span>
+                                <span class="goals-typing-dot" style="animation-delay:300ms"></span>
+                            </span>
+                            <span>VIGILANT düşünüyor…</span>
+                        </div>
+                    </div>
+
+                    <!-- Divider -->
+                    <div style="height:1px;background:linear-gradient(to right,transparent,rgba(255,255,255,0.06),transparent)"></div>
+
+                    <!-- Input bar -->
+                    <div style="display:flex;align-items:center;gap:8px;padding:10px">
+                        <input id="goalsChatInput" type="text"
+                               placeholder="Mesajınızı yazın…"
+                               style="flex:1;padding:8px 14px;border-radius:10px;font-size:13px;color:rgba(255,255,255,0.9);outline:none;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.06);transition:border-color 0.2s"
+                               onfocus="this.style.borderColor='rgba(99,102,241,0.3)'"
+                               onblur="this.style.borderColor='rgba(255,255,255,0.06)'"
+                               onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();if(window._goalsChatController)window._goalsChatController._onSend();}"
+                               />
+                        <button id="goalsChatSendBtn" type="button"
+                                style="padding:8px 14px;border-radius:10px;font-size:13px;font-weight:500;background:linear-gradient(135deg,rgba(16,185,129,0.55),rgba(5,150,105,0.45));color:white;border:1px solid rgba(16,185,129,0.2);cursor:pointer;transition:opacity 0.2s"
+                                onclick="if(window._goalsChatController)window._goalsChatController._onSend();"
+                                >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle">
+                                <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Question progress indicator -->
+                <div id="goalsChatProgress" style="display:none;align-items:center;gap:6px;margin-top:8px;padding-left:4px">
+                    <div style="display:flex;gap:4px" id="goalsChatDots"></div>
+                    <span style="color:rgba(255,255,255,0.2);font-size:10px" id="goalsChatProgressLabel"></span>
+                </div>
+            </div>
+
             <!-- SkillTree content area -->
             <div id="stContent">
                 <!-- Empty state (shown when no GoalTree loaded) -->
@@ -1976,6 +2099,9 @@
                     </svg>
                     <p>Henüz bir hedef ağacı yüklenmedi.<br>Önce bir Socratic Interview tamamlayıp GoalTree oluşturun, ardından <strong>"Yükle"</strong> butonuna tıklayın.</p>
                 </div>
+
+                <!-- Recursive Dynamic GoalTree container (rendered by dom-updater) -->
+                <div id="goal-tree-container" class="w-full overflow-y-auto" style="display:none"></div>
 
                 <!-- SkillTree layout (hidden until data loaded) -->
                 <div class="skilltree-layout" id="stLayout" style="display:none">
@@ -2024,6 +2150,7 @@
     <script src="mood-engine.js"></script>
     <script src="timer-service.js"></script>
     <script src="gemini-client.js"></script>
+    <script src="goal-tree-bundle.js"></script>
     <script>
         // =============================================
         // Mood Engine Instance + app-switch counter
@@ -2264,6 +2391,12 @@
             else if (pageName === 'history') loadHistoryPage();
             else if (pageName === 'settings') loadSettingsPage();
             else if (pageName === 'goals') stLoadGoalTree();
+
+            // Hide floating assistant on Goals tab, show on others
+            var floatingWidget = document.getElementById('vig-assistant-root');
+            if (floatingWidget) {
+                floatingWidget.style.display = (pageName === 'goals') ? 'none' : '';
+            }
         }
 
         var appIcons = {
@@ -2642,6 +2775,169 @@
                 console.error('Narrative request failed:', err);
                 if (btn) { btn.disabled = false; btn.textContent = 'Tekrar Dene'; }
             });
+        }
+
+        // =============================================
+        // Mission Control — Goal Tree Summary Renderer
+        // =============================================
+        function _renderMissionControl(payload) {
+            var widget = document.getElementById('mcWidget');
+            var list = document.getElementById('mcGoalList');
+            var countEl = document.getElementById('mcGoalCount');
+            if (!widget || !list) return;
+
+            var goals = (payload && payload.goals) || [];
+            var activeId = (payload && payload.lastActiveGoalId) || '';
+
+            if (goals.length === 0) {
+                if (countEl) countEl.textContent = '';
+                list.innerHTML = '<div class="mc-empty">Henüz hedef yok — Hedefler sekmesinden başlayın.</div>';
+                return;
+            }
+
+            if (countEl) countEl.textContent = goals.length + ' hedef';
+
+            var html = '';
+            for (var i = 0; i < goals.length; i++) {
+                var g = goals[i];
+                var id = g.id || '';
+                var title = g.title || 'Untitled';
+                var progress = typeof g.progress === 'number' ? g.progress : 0;
+                var isActive = (id === activeId && activeId !== '');
+
+                html += '<div class="mc-goal-item' + (isActive ? ' mc-active' : '') + '">';
+                html += '<div class="mc-goal-info">';
+                html += '<div class="mc-goal-title" style="cursor:pointer" onclick="mcGoalClick(\'' + id.replace(/'/g, "\\'") + '\')">' + _escHtml(title) + '</div>';
+                html += '<div class="mc-bar-track"><div class="mc-bar-fill" style="width:' + Math.min(progress, 100) + '%"></div></div>';
+                html += '</div>';
+                html += '<span class="mc-goal-pct">' + progress + '%</span>';
+
+                // Show next action items for active goal (max 3 incomplete)
+                if (isActive) {
+                    var actions = _getNextActions(g, 3);
+                    if (actions.length > 0) {
+                        html += '<div class="mc-actions">';
+                        for (var j = 0; j < actions.length; j++) {
+                            var a = actions[j];
+                            var doneClass = a.done ? ' mc-done' : '';
+                            var clickAttr = a.done ? '' : ' style="cursor:pointer" title="Tamamlamak için tıklayın" onclick="mcActionClick(\'' + id.replace(/'/g, "\\'") + '\',\'' + _escHtml(a.text).replace(/'/g, "\\'") + '\', this)"';
+                            html += '<div class="mc-action-chip' + doneClass + '"' + clickAttr + '>';
+                            html += '<span class="mc-action-cb"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2.5 6 5 8.5 9.5 3.5"/></svg></span>';
+                            html += '<span class="mc-action-text">' + _escHtml(a.text) + '</span>';
+                            html += '</div>';
+                        }
+                        html += '</div>';
+                    }
+                }
+
+                html += '</div>';
+            }
+
+            list.innerHTML = html;
+        }
+
+        function _getNextActions(goal, max) {
+            var result = [];
+            // Try actionItems on the goal itself
+            var items = goal.actionItems || [];
+            for (var i = 0; i < items.length && result.length < max; i++) {
+                result.push({ text: items[i].text || items[i], done: !!items[i].isCompleted });
+            }
+            if (result.length >= max) return result;
+
+            // Walk first-level children for their actionItems
+            var children = goal.children || [];
+            for (var c = 0; c < children.length && result.length < max; c++) {
+                var childItems = children[c].actionItems || [];
+                for (var k = 0; k < childItems.length && result.length < max; k++) {
+                    result.push({ text: childItems[k].text || childItems[k], done: !!childItems[k].isCompleted });
+                }
+            }
+            // Prefer incomplete first
+            result.sort(function(a, b) { return (a.done ? 1 : 0) - (b.done ? 1 : 0); });
+            return result.slice(0, max);
+        }
+
+        function _escHtml(str) {
+            var d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        var _mcLastPayload = null;
+
+        // Store payload reference for optimistic updates
+        var _origRenderMC = _renderMissionControl;
+        _renderMissionControl = function(payload) {
+            _mcLastPayload = payload;
+            _origRenderMC(payload);
+        };
+
+        /** Navigate to Hedefler tab and expand clicked goal */
+        function mcGoalClick(goalId) {
+            navigateTo('goals');
+            setTimeout(function() {
+                var el = document.querySelector('[data-goal-id="' + goalId + '"]')
+                      || document.getElementById('goal-' + goalId);
+                if (!el) return;
+                // Expand collapsed ancestors
+                var p = el.closest('.gt-children-collapsed, .gt-collapsed');
+                while (p) {
+                    p.classList.remove('gt-children-collapsed', 'gt-collapsed');
+                    p.classList.add('gt-children-expanded', 'gt-expanded');
+                    p = p.parentElement ? p.parentElement.closest('.gt-children-collapsed, .gt-collapsed') : null;
+                }
+                el.classList.remove('gt-children-collapsed', 'gt-collapsed');
+                el.classList.add('gt-children-expanded', 'gt-expanded');
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                el.style.outline = '2px solid rgba(99,102,241,.6)';
+                el.style.outlineOffset = '4px';
+                setTimeout(function() { el.style.outline = ''; el.style.outlineOffset = ''; }, 2000);
+            }, 200);
+        }
+
+        /** Complete action item from Dashboard — send to C++ and update optimistically */
+        function mcActionClick(goalId, actionText, chipEl) {
+            chipEl.classList.add('mc-done');
+            chipEl.style.cursor = 'default';
+            chipEl.style.pointerEvents = 'none';
+
+            // Send to C++ backend
+            try {
+                window.chrome.webview.postMessage({
+                    type: 'CompleteActionItem',
+                    goalId: goalId,
+                    actionText: actionText
+                });
+            } catch(e) { /* webview not ready */ }
+
+            // Optimistic progress update
+            if (_mcLastPayload && _mcLastPayload.goals) {
+                for (var i = 0; i < _mcLastPayload.goals.length; i++) {
+                    var g = _mcLastPayload.goals[i];
+                    if (g.id !== goalId) continue;
+                    var allItems = (g.actionItems || []).slice();
+                    var ch = g.children || [];
+                    for (var c = 0; c < ch.length; c++) {
+                        allItems = allItems.concat(ch[c].actionItems || []);
+                    }
+                    // Mark action done
+                    for (var k = 0; k < allItems.length; k++) {
+                        var it = allItems[k];
+                        if (it && typeof it === 'object' && (it.text === actionText)) {
+                            it.isCompleted = true; break;
+                        }
+                    }
+                    var total = allItems.length;
+                    var done = 0;
+                    for (var k = 0; k < allItems.length; k++) {
+                        if (allItems[k] && typeof allItems[k] === 'object' && allItems[k].isCompleted) done++;
+                    }
+                    g.progress = total > 0 ? Math.min(Math.round(done / total * 100), 100) : g.progress;
+                    break;
+                }
+                _renderMissionControl(_mcLastPayload);
+            }
         }
 
         // =============================================
@@ -3770,18 +4066,49 @@
 
             // ── Data Loading ──
             function loadTree(tree) {
-                if (!tree || !tree.majors) return;
+                if (!tree) return;
+
+                // ── v2 Dynamic GoalTree detection ──
+                // If tree has .root (DynamicGoalTree wrapper) or .children (raw GoalNode),
+                // delegate to the new recursive renderer and bail out.
+                var v2Root = null;
+                if (tree.version === 2 && tree.root) {
+                    v2Root = tree.root;
+                } else if (tree.children && tree.id) {
+                    v2Root = tree;
+                }
+                if (v2Root && typeof GoalTreeBundle !== 'undefined') {
+                    var container = document.getElementById('goal-tree-container');
+                    if (container) {
+                        container.style.display = '';
+                        container.innerHTML = '';
+                        GoalTreeBundle.renderGoalTree(v2Root, container);
+                    }
+                    // Hide old SkillTree SVG + empty state
+                    var layout = document.getElementById('stLayout');
+                    var empty = document.getElementById('stEmptyState');
+                    if (layout) layout.style.display = 'none';
+                    if (empty) empty.style.display = 'none';
+                    // Persist v2 tree
+                    try { localStorage.setItem('vigilant-goaltree', JSON.stringify(tree)); } catch(e) {}
+                    return;
+                }
+
+                // ── Legacy v1 (majors/minors/micros) ──
+                if (!tree.majors) return;
                 _tree = tree;
                 _selectedMicroId = null;
                 _buildIndex();
                 _layout();
                 _render();
                 _updateProgress();
-                // Show layout, hide empty
+                // Show old layout, hide empty + new container
                 var layout = document.getElementById('stLayout');
                 var empty = document.getElementById('stEmptyState');
+                var gtc = document.getElementById('goal-tree-container');
                 if (layout) layout.style.display = '';
                 if (empty) empty.style.display = 'none';
+                if (gtc) gtc.style.display = 'none';
                 // Reset detail
                 _showDetailEmpty();
             }
@@ -4380,27 +4707,116 @@
         // Init SkillTree when DOM ready
         SkillTree.init();
 
+        // ── Mission Control Bootstrap ──
+        // Load existing goals from localStorage so Mission Control is populated on page load.
+        (function _bootstrapMissionControl() {
+            var goals = [];
+
+            // 1) Try forest array (vigilant-goaltrees)
+            try {
+                var raw = localStorage.getItem('vigilant-goaltrees');
+                if (raw) {
+                    var forest = JSON.parse(raw);
+                    if (Array.isArray(forest)) {
+                        for (var i = 0; i < forest.length; i++) {
+                            var node = forest[i];
+                            if (!node || !node.id) continue;
+                            goals.push(_mcSummarizeGoal(node));
+                        }
+                    }
+                }
+            } catch(e) {}
+
+            // 2) Fallback: single tree (vigilant-goaltree)
+            if (goals.length === 0) {
+                try {
+                    var single = localStorage.getItem('vigilant-goaltree');
+                    if (single) {
+                        var parsed = JSON.parse(single);
+                        var root = (parsed && parsed.root) ? parsed.root : parsed;
+                        if (root && root.id) {
+                            goals.push(_mcSummarizeGoal(root));
+                        }
+                    }
+                } catch(e) {}
+            }
+
+            if (goals.length > 0) {
+                _renderMissionControl({
+                    lastActiveGoalId: goals[0].id,
+                    goals: goals
+                });
+            }
+        })();
+
+        /** Build a summary object from a full GoalNode tree for Mission Control */
+        function _mcSummarizeGoal(node) {
+            var progress = typeof node.progress === 'number' ? node.progress : _mcCalcProgress(node);
+            var summary = {
+                id: node.id || '',
+                title: node.title || 'Untitled',
+                progress: progress
+            };
+            // Include actionItems if present
+            if (node.actionItems && node.actionItems.length > 0) {
+                summary.actionItems = node.actionItems;
+            }
+            // Include first-level children summaries (for action extraction)
+            if (node.children && node.children.length > 0) {
+                summary.children = [];
+                for (var i = 0; i < node.children.length; i++) {
+                    var c = node.children[i];
+                    var cs = { id: c.id || '', title: c.title || '', progress: typeof c.progress === 'number' ? c.progress : 0 };
+                    if (c.actionItems && c.actionItems.length > 0) cs.actionItems = c.actionItems;
+                    summary.children.push(cs);
+                }
+            }
+            return summary;
+        }
+
+        /** Recursively estimate progress from leaf completion ratios */
+        function _mcCalcProgress(node) {
+            if (!node) return 0;
+            if (node.isLeaf || !node.children || node.children.length === 0) {
+                return typeof node.progress === 'number' ? node.progress : 0;
+            }
+            var sum = 0;
+            for (var i = 0; i < node.children.length; i++) {
+                sum += _mcCalcProgress(node.children[i]);
+            }
+            return Math.round(sum / node.children.length);
+        }
+
         // Global helpers called from HTML
         function stLoadGoalTree() {
-            // Try to load from the most recent GoalTree in localStorage or request from backend
+            // Try to load goal forest from localStorage via GoalTreeBundle
+            if (typeof GoalTreeBundle !== 'undefined' && GoalTreeBundle.loadForestFromStorage) {
+                if (GoalTreeBundle.loadForestFromStorage()) return;
+            }
+
+            // Legacy single-tree fallback
             var stored = null;
             try { stored = localStorage.getItem('vigilant-goaltree'); } catch(e) {}
             if (stored) {
                 try {
                     var parsed = JSON.parse(stored);
-                    if (parsed && parsed.majors) { SkillTree.loadTree(parsed); return; }
+                    if (parsed && (parsed.majors || parsed.root || parsed.children)) { SkillTree.loadTree(parsed); return; }
                 } catch(e) {}
             }
+
             // If no local tree, request from backend
             try {
-                window.chrome.webview.postMessage({
-                    type: 'GetLatestGoalTree',
-                    sessionId: '',
-                    requestId: 'req-load-' + Date.now(),
-                    ts: new Date().toISOString(),
-                    payload: {}
-                });
-            } catch(e) { console.warn('[SkillTree] No GoalTree available'); }
+                if (window.chrome && window.chrome.webview) {
+                    window.chrome.webview.postMessage({
+                        type: 'GetLatestGoalTree',
+                        sessionId: '',
+                        requestId: 'req-load-' + Date.now(),
+                        ts: new Date().toISOString(),
+                        payload: {}
+                    });
+                    return;
+                }
+            } catch(e) {}
         }
         function stZoom(factor) { SkillTree.zoom(factor); }
         function stResetView() { SkillTree.resetView(); }
@@ -4412,9 +4828,18 @@
             window.chrome.webview.addEventListener('message', function(e) {
                 var d = e.data;
                 if (d && d.type === 'GoalTreeGenerated' && d.payload && d.payload.goalTree) {
-                    try { localStorage.setItem('vigilant-goaltree', JSON.stringify(d.payload.goalTree)); } catch(e) {}
+                    // Append to goal forest
+                    var gt = d.payload.goalTree;
+                    var root = gt.root || gt;
+                    if (root && root.id) {
+                        var forest = [];
+                        try { var r = localStorage.getItem('vigilant-goaltrees'); if(r) forest = JSON.parse(r); } catch(e) {}
+                        if (!Array.isArray(forest)) forest = [];
+                        forest.push(root);
+                        try { localStorage.setItem('vigilant-goaltrees', JSON.stringify(forest)); } catch(e) {}
+                    }
                 }
-                // Also store after successful status change
+                // Also store after successful status change (update forest entry)
                 if (d && d.type === 'MicroTaskStatusChanged') {
                     var tree = SkillTree.getTree();
                     if (tree) {
@@ -4642,5 +5067,7 @@
     </script>
     <!-- Socratic Interview: Floating AI Assistant Widget -->
     <script src="interview-widget.js"></script>
+    <!-- Goals Chat: Socratic Planner -->
+    <script src="goals-chat-bundle.js"></script>
 </body>
 </html>

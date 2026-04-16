@@ -25,6 +25,7 @@
     <ClCompile Include="src\AI\AutoTickerVerifier.cpp" />
     <ClCompile Include="src\AI\AutoTickerVersionGuard.cpp" />
     <ClCompile Include="src\AI\GeminiService.cpp" />
+    <ClCompile Include="src\AI\GoalManager.cpp" />
     <ClCompile Include="src\AI\InterviewHandler.cpp" />
     <ClCompile Include="src\AI\InterviewSlotFiller.cpp" />
     <ClCompile Include="src\Core\WindowTracker.cpp" />
@@ -48,6 +49,7 @@
     <ClInclude Include="include\AI\AutoTickerVerifier.hpp" />
     <ClInclude Include="include\AI\AutoTickerVersionGuard.hpp" />
     <ClInclude Include="include\AI\GeminiService.hpp" />
+    <ClInclude Include="include\AI\GoalManager.hpp" />
     <ClInclude Include="include\AI\GoalTree.hpp" />
     <ClInclude Include="include\AI\InterviewHandler.hpp" />
     <ClInclude Include="include\AI\InterviewResult.hpp" />
@@ -70,12 +72,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="dashboard_pro.html" />
-    <None Include="docs\OPTIMIZATION_PLAN.md" />
-    <None Include="docs\PERF_RUNBOOK.md" />
     <None Include="flow-state.css" />
     <None Include="micro-interactions.css" />
     <None Include="micro-interactions.js" />
-    <None Include="tests\build_and_run_tests.bat" />
     <None Include="ts\dashboard\dom-updater.ts" />
     <None Include="ts\dashboard\flow-state-controller.test.ts" />
     <None Include="ts\dashboard\flow-state-controller.ts" />
@@ -87,7 +86,6 @@
     <None Include="ts\dashboard\timer-store.ts" />
     <None Include="ts\dashboard\tsconfig.json" />
     <None Include="ts\gemini\config.ts" />
-    <None Include="ts\gemini\example.ts" />
     <None Include="ts\gemini\fetch-retry.ts" />
     <None Include="ts\gemini\gemini-client.ts" />
     <None Include="ts\gemini\index.ts" />
@@ -104,16 +102,20 @@
     <None Include="ts\interview\auto-ticker-version-types.ts" />
     <None Include="ts\interview\auto-ticker-version-ui.ts" />
     <None Include="ts\interview\event-bridge.ts" />
+    <None Include="ts\interview\goal-tree-recursive-ui.ts" />
     <None Include="ts\interview\goal-tree-schema.test.ts" />
     <None Include="ts\interview\goal-tree-schema.ts" />
     <None Include="ts\interview\goal-tree-types.ts" />
     <None Include="ts\interview\goal-tree-ui.ts" />
+    <None Include="ts\interview\goals-chat-controller.ts" />
     <None Include="ts\interview\interview-result-types.test.ts" />
     <None Include="ts\interview\interview-result-types.ts" />
     <None Include="ts\interview\slot-filler-types.ts" />
     <None Include="ts\interview\slot-filler-ui.ts" />
     <None Include="ts\interview\tsconfig.test.json" />
     <None Include="VIGILANT\ts\interview\goal-tree-replanner.ts" />
+    <None Include="web\js\goal-tree-bundle.js" />
+    <None Include="web\js\goals-chat-bundle.js" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resources\VIGILANT.rc" />
@@ -241,6 +243,17 @@
       <AdditionalDependencies>winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
+  <!-- Web assets embedded via RCDATA - track as RC dependencies -->
+  <ItemGroup>
+    <WebAsset Include="web\html\*.html" />
+    <WebAsset Include="web\css\*.css" />
+    <WebAsset Include="web\js\*.js" />
+  </ItemGroup>
+  <Target Name="ForceResourceRecompileOnWebChange" BeforeTargets="ResourceCompile" Inputs="@(WebAsset)" Outputs="$(IntDir)web_assets.stamp">
+    <Touch Files="$(IntDir)web_assets.stamp" AlwaysCreate="true" />
+    <Touch Files="resources\VIGILANT.rc" />
+    <Message Text="[VIGILANT] Web assets changed - forcing resource recompile" Importance="high" />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
     <Import Project="..\packages\Microsoft.Web.WebView2.1.0.3856.49\build\native\Microsoft.Web.WebView2.targets" Condition="Exists('..\packages\Microsoft.Web.WebView2.1.0.3856.49\build\native\Microsoft.Web.WebView2.targets')" />

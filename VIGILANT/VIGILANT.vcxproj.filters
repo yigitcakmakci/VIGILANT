@@ -132,6 +132,18 @@
     <ClCompile Include="src\AI\AutoTickerMatcher.cpp">
       <Filter>Kaynak Dosyalar</Filter>
     </ClCompile>
+    <ClCompile Include="src\AI\AutoTickerTickEngine.cpp">
+      <Filter>Kaynak Dosyalar</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AI\AutoTickerVerifier.cpp">
+      <Filter>Kaynak Dosyalar</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AI\AutoTickerVersionGuard.cpp">
+      <Filter>Kaynak Dosyalar</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AI\GoalManager.cpp">
+      <Filter>Kaynak Dosyalar</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\AI\AIClassifierTask.hpp">
@@ -200,6 +212,18 @@
     <ClInclude Include="include\AI\AutoTickerMatcher.hpp">
       <Filter>Ust Bilgi Dosyalari</Filter>
     </ClInclude>
+    <ClInclude Include="include\AI\AutoTickerTickEngine.hpp">
+      <Filter>Ust Bilgi Dosyalari</Filter>
+    </ClInclude>
+    <ClInclude Include="include\AI\AutoTickerVerifier.hpp">
+      <Filter>Ust Bilgi Dosyalari</Filter>
+    </ClInclude>
+    <ClInclude Include="include\AI\AutoTickerVersionGuard.hpp">
+      <Filter>Ust Bilgi Dosyalari</Filter>
+    </ClInclude>
+    <ClInclude Include="include\AI\GoalManager.hpp">
+      <Filter>Ust Bilgi Dosyalari</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="ts\dashboard\dom-updater.ts">
@@ -233,9 +257,6 @@
       <Filter>TypeScript\Dashboard</Filter>
     </None>
     <None Include="ts\gemini\config.ts">
-      <Filter>TypeScript\Gemini</Filter>
-    </None>
-    <None Include="ts\gemini\example.ts">
       <Filter>TypeScript\Gemini</Filter>
     </None>
     <None Include="ts\gemini\fetch-retry.ts">
@@ -277,19 +298,10 @@
     <None Include="ts\interview\tsconfig.test.json">
       <Filter>TypeScript\Interview</Filter>
     </None>
-    <None Include="docs\OPTIMIZATION_PLAN.md">
-      <Filter>Belgeler</Filter>
-    </None>
-    <None Include="docs\PERF_RUNBOOK.md">
-      <Filter>Belgeler</Filter>
-    </None>
     <None Include="dashboard_pro.html" />
     <None Include="flow-state.css" />
     <None Include="micro-interactions.css" />
     <None Include="micro-interactions.js" />
-    <None Include="tests\build_and_run_tests.bat">
-      <Filter>Kaynak Dosyalar</Filter>
-    </None>
     <None Include="ts\interview\goal-tree-schema.test.ts" />
     <None Include="ts\interview\goal-tree-schema.ts" />
     <None Include="ts\interview\goal-tree-types.ts" />
@@ -297,6 +309,16 @@
     <None Include="VIGILANT\ts\interview\goal-tree-replanner.ts" />
     <None Include="ts\interview\auto-ticker-types.ts" />
     <None Include="ts\interview\auto-ticker-ui.ts" />
+    <None Include="ts\interview\auto-ticker-tick-types.ts" />
+    <None Include="ts\interview\auto-ticker-tick-ui.ts" />
+    <None Include="ts\interview\auto-ticker-verifier-types.ts" />
+    <None Include="ts\interview\auto-ticker-verifier-ui.ts" />
+    <None Include="ts\interview\auto-ticker-version-types.ts" />
+    <None Include="ts\interview\auto-ticker-version-ui.ts" />
+    <None Include="ts\interview\goal-tree-recursive-ui.ts" />
+    <None Include="ts\interview\goals-chat-controller.ts" />
+    <None Include="web\js\goals-chat-bundle.js" />
+    <None Include="web\js\goal-tree-bundle.js" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resources\VIGILANT.rc">

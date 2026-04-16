@@ -22,6 +22,8 @@ export type {
     EvidenceType,
     MicroTaskStatus,
     MicroTaskStatusExtended,
+    GoalNode,
+    DynamicGoalTree,
     DiffEntry,
     GoalTreeDiff,
 } from './goal-tree-types';
@@ -40,6 +42,16 @@ export type { DoneGateResult } from './goal-tree-ui';
 export { canMarkDone, evidencePlaceholder } from './goal-tree-ui';
 
 export { mergeGoalTrees, diffGoalTrees } from './goal-tree-replanner';
+
+export {
+    renderGoalTree,
+    computeNodeProgress,
+    collectLeaves,
+    findNodeById,
+    treeDepth,
+} from './goal-tree-recursive-ui';
+
+export { GoalsChatController } from './goals-chat-controller';
 
 export type {
     MatchedSpan,
@@ -154,8 +166,11 @@ export type EventType =
     | 'CommitTickRequested'
     | 'GetTickHistoryRequested'
     | 'RematchRequested'
+    | 'GoalsChatStartRequested'
+    | 'GoalsChatMessageSubmitted'
     // C++ → UI
     | 'InterviewStarted'
+    | 'GoalsChatResponse'
     | 'AiQuestionProduced'
     | 'InterviewFinalized'
     | 'AskNextQuestion'
@@ -168,6 +183,7 @@ export type EventType =
     | 'TickMicroTaskFailed'
     | 'MicroTaskStatusChanged'
     | 'MicroTaskStatusChangeFailed'
+    | 'GoalTreeUpdated'
     | 'ReplanCompleted'
     | 'ReplanFailed'
     | 'MatchCandidatesProduced'
@@ -408,6 +424,26 @@ export function publishFinalize(sessionId: string, endedBy: 'cta' | 'limit'): vo
         requestId: nextRequestId(),
         ts: new Date().toISOString(),
         payload: { endedBy }
+    });
+}
+
+export function publishGoalsChatStart(): void {
+    publish({
+        type: 'GoalsChatStartRequested',
+        sessionId: '',
+        requestId: nextRequestId(),
+        ts: new Date().toISOString(),
+        payload: {}
+    });
+}
+
+export function publishGoalsChatMessage(sessionId: string, text: string): void {
+    publish({
+        type: 'GoalsChatMessageSubmitted',
+        sessionId,
+        requestId: nextRequestId(),
+        ts: new Date().toISOString(),
+        payload: { sessionId, text }
     });
 }
 
