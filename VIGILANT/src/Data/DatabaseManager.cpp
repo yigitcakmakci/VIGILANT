@@ -2,6 +2,7 @@
 #include "AI/AutoTickerTickEngine.hpp"
 #include "Utils/PerfCounters.hpp"
 #include <iostream>
+#include <cmath>
 
 using json = nlohmann::json;
 
@@ -91,7 +92,7 @@ bool DatabaseManager::init() {
         "CREATED_AT DATETIME DEFAULT CURRENT_TIMESTAMP);";
     sqlite3_exec(db, sqlDailySummary, NULL, 0, &zErrMsg);
 
-    sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_activities_date ON Activities(DATE(TIMESTAMP));", NULL, 0, &zErrMsg);
+    sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_activities_date ON Activities(DATE(TIMESTAMP, 'localtime'));", NULL, 0, &zErrMsg);
 
     // 6. InterviewSessions Tablosu
     const char* sqlInterviewSessions =
@@ -141,6 +142,59 @@ bool DatabaseManager::init() {
                      "ON AutoTicks(JOURNAL_ENTRY_ID);",
                  NULL, 0, &zErrMsg);
 
+	// 9. Activities.ACTIVE_DURATION column (added later, error swallowed)
+	sqlite3_exec(db, "ALTER TABLE Activities ADD COLUMN ACTIVE_DURATION INTEGER DEFAULT 0;", NULL, 0, nullptr);
+
+	// 10. AppSettings (key/value)
+	sqlite3_exec(db,
+		"CREATE TABLE IF NOT EXISTS AppSettings ("
+		"KEY TEXT PRIMARY KEY,"
+		"VALUE TEXT NOT NULL DEFAULT '',"
+		"UPDATED_AT DATETIME DEFAULT CURRENT_TIMESTAMP);",
+		NULL, 0, &zErrMsg);
+
+	// 11. AppGoalLinks
+	sqlite3_exec(db,
+		"CREATE TABLE IF NOT EXISTS AppGoalLinks ("
+		"PROCESS TEXT NOT NULL,"
+		"TITLE_PATTERN TEXT NOT NULL DEFAULT '*',"
+		"GOAL_ID TEXT NOT NULL,"
+		"GOAL_TITLE TEXT DEFAULT '',"
+		"CREATED_AT DATETIME DEFAULT CURRENT_TIMESTAMP,"
+		"PRIMARY KEY (PROCESS, TITLE_PATTERN, GOAL_ID));",
+		NULL, 0, &zErrMsg);
+
+	// 12. DigitalDietTags
+	sqlite3_exec(db,
+		"CREATE TABLE IF NOT EXISTS DigitalDietTags ("
+		"PROCESS TEXT PRIMARY KEY,"
+		"TAG TEXT NOT NULL,"
+		"NOTE TEXT DEFAULT '',"
+		"UPDATED_AT DATETIME DEFAULT CURRENT_TIMESTAMP);",
+		NULL, 0, &zErrMsg);
+
+	// 13. IntentLog
+	sqlite3_exec(db,
+		"CREATE TABLE IF NOT EXISTS IntentLog ("
+		"ID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		"TIMESTAMP DATETIME DEFAULT CURRENT_TIMESTAMP,"
+		"PROCESS TEXT,"
+		"TITLE TEXT,"
+		"INTENT TEXT,"
+		"OUTCOME TEXT,"
+		"DURATION_HINT INTEGER DEFAULT 0);",
+		NULL, 0, &zErrMsg);
+
+	// 14. WeeklyReviews
+	sqlite3_exec(db,
+		"CREATE TABLE IF NOT EXISTS WeeklyReviews ("
+		"WEEK_START TEXT PRIMARY KEY,"
+		"TOTAL_SEC INTEGER DEFAULT 0,"
+		"PRODUCTIVE_SEC INTEGER DEFAULT 0,"
+		"TOP_APPS_JSON TEXT DEFAULT '[]',"
+		"NARRATIVE TEXT DEFAULT '',"
+		"CREATED_AT DATETIME DEFAULT CURRENT_TIMESTAMP);",
+		NULL, 0, &zErrMsg);
     // 9. Seed Data (Varsayılan Bilgiler)
     const char* seedSql = "INSERT OR IGNORE INTO KnowledgeBase (PROCESS, TITLE_KEYWORD, CATEGORY, SCORE, SOURCE) VALUES "
         "('devenv.exe', '*', 'Yazilim', 10, 'seed'),"
@@ -335,7 +389,7 @@ float DatabaseManager::calculateDailyProductivity() {
         "FROM Activities a "
         "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
         "AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
-        "WHERE DATE(a.TIMESTAMP) = DATE('now');";
+        "WHERE DATE(a.TIMESTAMP, 'localtime') = DATE('now', 'localtime');";
 
     sqlite3_stmt* stmt;
     float productivity = 0.0f;
@@ -365,7 +419,7 @@ float DatabaseManager::calculateTodaysTotalScore() {
         "FROM Activities a "
         "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
         "AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
-        "WHERE DATE(a.TIMESTAMP) = DATE('now');";
+        "WHERE DATE(a.TIMESTAMP, 'localtime') = DATE('now', 'localtime');";
 
     sqlite3_stmt* stmt;
     float totalScore = 0.0f;
@@ -384,7 +438,7 @@ int DatabaseManager::getTodaysTotalDuration() {
     const char* sql =
         "SELECT SUM(a.DURATION) "
         "FROM Activities a "
-        "WHERE DATE(a.TIMESTAMP) = DATE('now');";
+        "WHERE DATE(a.TIMESTAMP, 'localtime') = DATE('now', 'localtime');";
 
     sqlite3_stmt* stmt;
     int totalDuration = 0;
@@ -457,7 +511,7 @@ json DatabaseManager::getDashboardSummaryJson() {
             "FROM Activities a "
             "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
             "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
-            "WHERE DATE(a.TIMESTAMP) = DATE('now');";
+            "WHERE DATE(a.TIMESTAMP, 'localtime') = DATE('now', 'localtime');";
 
         float productivity = 0.0f;
         float totalScore = 0.0f;
@@ -493,7 +547,7 @@ json DatabaseManager::getDashboardSummaryJson() {
             "FROM Activities a "
             "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
             "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
-            "WHERE DATE(a.TIMESTAMP) = DATE('now') "
+            "WHERE DATE(a.TIMESTAMP, 'localtime') = DATE('now', 'localtime') "
             "GROUP BY a.PROCESS "
             "ORDER BY total_sec DESC "
             "LIMIT 3;";
@@ -530,7 +584,7 @@ json DatabaseManager::getDashboardSummaryJson() {
             "FROM Activities a "
             "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
             "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
-            "WHERE DATE(a.TIMESTAMP) = DATE('now');";
+            "WHERE DATE(a.TIMESTAMP, 'localtime') = DATE('now', 'localtime');";
 
         int productive = 0, unproductive = 0, neutral = 0, total = 0;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
@@ -844,7 +898,7 @@ nlohmann::json DatabaseManager::getHistoricalData(const std::string& date) {
             "FROM Activities a "
             "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
             "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
-            "WHERE DATE(a.TIMESTAMP) = ?;";
+            "WHERE DATE(a.TIMESTAMP, 'localtime') = ?;";
 
         int productive = 0, unproductive = 0, neutral = 0, total = 0, cnt = 0;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
@@ -881,7 +935,7 @@ nlohmann::json DatabaseManager::getHistoricalData(const std::string& date) {
         sqlite3_stmt* stmt;
         const char* sql =
             "SELECT a.PROCESS, SUM(a.DURATION) AS total_sec "
-            "FROM Activities a WHERE DATE(a.TIMESTAMP) = ? "
+            "FROM Activities a WHERE DATE(a.TIMESTAMP, 'localtime') = ? "
             "GROUP BY a.PROCESS ORDER BY total_sec DESC LIMIT 1;";
         std::string topApp = "";
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
@@ -904,7 +958,7 @@ nlohmann::json DatabaseManager::getHistoricalData(const std::string& date) {
             "FROM Activities a "
             "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
             "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
-            "WHERE DATE(a.TIMESTAMP) = ? "
+            "WHERE DATE(a.TIMESTAMP, 'localtime') = ? "
             "GROUP BY a.PROCESS ORDER BY total_sec DESC LIMIT 5;";
         json topApps = json::array();
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
@@ -935,7 +989,7 @@ std::vector<ActivityLog> DatabaseManager::getLogsForDate(const std::string& date
         "FROM Activities a "
         "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
         "AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
-        "WHERE DATE(a.TIMESTAMP) = ? "
+        "WHERE DATE(a.TIMESTAMP, 'localtime') = ? "
         "GROUP BY a.ID ORDER BY a.ID DESC LIMIT ?;";
 
     sqlite3_stmt* stmt;
@@ -964,7 +1018,7 @@ nlohmann::json DatabaseManager::getDailyTrends(int days) {
     // Son N gün için günlük özet (Activities tablosundan canlı hesap)
     sqlite3_stmt* stmt;
     const char* sql =
-        "SELECT DATE(a.TIMESTAMP) AS day, "
+        "SELECT DATE(a.TIMESTAMP, 'localtime') AS day, "
         "  SUM(a.DURATION) AS total, "
         "  SUM(CASE WHEN COALESCE(k.SCORE, 0) > 0  THEN a.DURATION ELSE 0 END) AS productive, "
         "  SUM(CASE WHEN COALESCE(k.SCORE, 0) < 0  THEN a.DURATION ELSE 0 END) AS unproductive, "
@@ -972,7 +1026,7 @@ nlohmann::json DatabaseManager::getDailyTrends(int days) {
         "FROM Activities a "
         "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
         "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
-        "WHERE a.TIMESTAMP >= DATE('now', ? || ' days') "
+        "WHERE a.TIMESTAMP >= DATE('now', 'localtime', ? || ' days') "
         "GROUP BY day ORDER BY day ASC;";
 
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
@@ -1017,7 +1071,7 @@ bool DatabaseManager::saveDailySummary(const std::string& date) {
             "FROM Activities a "
             "LEFT JOIN KnowledgeBase k ON a.PROCESS = k.PROCESS "
             "  AND (k.TITLE_KEYWORD = '*' OR a.TITLE LIKE '%' || k.TITLE_KEYWORD || '%') "
-            "WHERE DATE(a.TIMESTAMP) = ?;";
+            "WHERE DATE(a.TIMESTAMP, 'localtime') = ?;";
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
             sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
             if (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -1039,7 +1093,7 @@ bool DatabaseManager::saveDailySummary(const std::string& date) {
     std::string topApp = "";
     {
         const char* sql =
-            "SELECT a.PROCESS FROM Activities a WHERE DATE(a.TIMESTAMP) = ? "
+            "SELECT a.PROCESS FROM Activities a WHERE DATE(a.TIMESTAMP, 'localtime') = ? "
             "GROUP BY a.PROCESS ORDER BY SUM(a.DURATION) DESC LIMIT 1;";
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
             sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
@@ -1084,7 +1138,7 @@ nlohmann::json DatabaseManager::getAvailableDates() {
     json result = json::array();
     sqlite3_stmt* stmt;
     const char* sql =
-        "SELECT DISTINCT DATE(TIMESTAMP) AS day FROM Activities "
+        "SELECT DISTINCT DATE(TIMESTAMP, 'localtime') AS day FROM Activities "
         "ORDER BY day DESC LIMIT 90;";
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -1375,4 +1429,428 @@ std::vector<TickRecord> DatabaseManager::getAutoTicksByJournal(
     }
     sqlite3_finalize(stmt);
     return records;
+}
+// =============================================================================
+// Generated Implementations (added to satisfy header declarations)
+// =============================================================================
+
+void DatabaseManager::updateActiveDuration(int id, int activeSeconds) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql = "UPDATE Activities SET ACTIVE_DURATION = ? WHERE ID = ?;";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+	sqlite3_bind_int(stmt, 1, activeSeconds);
+	sqlite3_bind_int(stmt, 2, id);
+	sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
+}
+
+std::string DatabaseManager::getSetting(const std::string& key, const std::string& defaultValue) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	sqlite3_stmt* stmt = nullptr;
+	std::string result = defaultValue;
+	if (sqlite3_prepare_v2(db, "SELECT VALUE FROM AppSettings WHERE KEY = ? LIMIT 1;", -1, &stmt, nullptr) == SQLITE_OK) {
+		sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+		if (sqlite3_step(stmt) == SQLITE_ROW) {
+			const unsigned char* v = sqlite3_column_text(stmt, 0);
+			if (v) result = reinterpret_cast<const char*>(v);
+		}
+		sqlite3_finalize(stmt);
+	}
+	return result;
+}
+
+bool DatabaseManager::setSetting(const std::string& key, const std::string& value) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql = "INSERT INTO AppSettings (KEY, VALUE, UPDATED_AT) VALUES (?, ?, CURRENT_TIMESTAMP) "
+					  "ON CONFLICT(KEY) DO UPDATE SET VALUE = excluded.VALUE, UPDATED_AT = CURRENT_TIMESTAMP;";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+	sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 2, value.c_str(), -1, SQLITE_TRANSIENT);
+	bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+	sqlite3_finalize(stmt);
+	return ok;
+}
+
+bool DatabaseManager::linkAppToGoal(const std::string& process, const std::string& titlePattern,
+									const std::string& goalId, const std::string& goalTitle) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql = "INSERT OR REPLACE INTO AppGoalLinks (PROCESS, TITLE_PATTERN, GOAL_ID, GOAL_TITLE) "
+					  "VALUES (?, ?, ?, ?);";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+	sqlite3_bind_text(stmt, 1, process.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 2, titlePattern.empty() ? "*" : titlePattern.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 3, goalId.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 4, goalTitle.c_str(), -1, SQLITE_TRANSIENT);
+	bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+	sqlite3_finalize(stmt);
+	return ok;
+}
+
+bool DatabaseManager::unlinkAppFromGoal(const std::string& process, const std::string& titlePattern,
+										const std::string& goalId) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql = "DELETE FROM AppGoalLinks WHERE PROCESS = ? AND TITLE_PATTERN = ? AND GOAL_ID = ?;";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+	sqlite3_bind_text(stmt, 1, process.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 2, titlePattern.empty() ? "*" : titlePattern.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 3, goalId.c_str(), -1, SQLITE_TRANSIENT);
+	bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+	sqlite3_finalize(stmt);
+	return ok;
+}
+
+nlohmann::json DatabaseManager::getAppGoalLinks() {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	json arr = json::array();
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql = "SELECT PROCESS, TITLE_PATTERN, GOAL_ID, GOAL_TITLE FROM AppGoalLinks ORDER BY PROCESS;";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+		while (sqlite3_step(stmt) == SQLITE_ROW) {
+			json o;
+			o["process"]      = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+			o["titlePattern"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+			o["goalId"]       = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+			const unsigned char* gt = sqlite3_column_text(stmt, 3);
+			o["goalTitle"]    = gt ? reinterpret_cast<const char*>(gt) : "";
+			arr.push_back(std::move(o));
+		}
+		sqlite3_finalize(stmt);
+	}
+	return arr;
+}
+
+bool DatabaseManager::setDigitalDietTag(const std::string& process, const std::string& tag,
+										const std::string& note) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql = "INSERT INTO DigitalDietTags (PROCESS, TAG, NOTE, UPDATED_AT) "
+					  "VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+					  "ON CONFLICT(PROCESS) DO UPDATE SET TAG = excluded.TAG, NOTE = excluded.NOTE, UPDATED_AT = CURRENT_TIMESTAMP;";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+	sqlite3_bind_text(stmt, 1, process.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 2, tag.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 3, note.c_str(), -1, SQLITE_TRANSIENT);
+	bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+	sqlite3_finalize(stmt);
+	return ok;
+}
+
+nlohmann::json DatabaseManager::getDigitalDietTags() {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	json arr = json::array();
+	sqlite3_stmt* stmt = nullptr;
+	if (sqlite3_prepare_v2(db, "SELECT PROCESS, TAG, NOTE FROM DigitalDietTags ORDER BY PROCESS;", -1, &stmt, nullptr) == SQLITE_OK) {
+		while (sqlite3_step(stmt) == SQLITE_ROW) {
+			json o;
+			o["process"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+			o["tag"]     = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+			const unsigned char* n = sqlite3_column_text(stmt, 2);
+			o["note"]    = n ? reinterpret_cast<const char*>(n) : "";
+			arr.push_back(std::move(o));
+		}
+		sqlite3_finalize(stmt);
+	}
+	return arr;
+}
+
+bool DatabaseManager::logIntent(const std::string& process, const std::string& windowTitle,
+								const std::string& intent, const std::string& outcome,
+								int durationHint) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql = "INSERT INTO IntentLog (PROCESS, TITLE, INTENT, OUTCOME, DURATION_HINT) VALUES (?, ?, ?, ?, ?);";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+	sqlite3_bind_text(stmt, 1, process.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 2, windowTitle.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 3, intent.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 4, outcome.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int(stmt, 5, durationHint);
+	bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+	sqlite3_finalize(stmt);
+	return ok;
+}
+
+nlohmann::json DatabaseManager::getPatternMirror(int days) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	json buckets = json::array();
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql =
+		"SELECT CAST(strftime('%w', a.TIMESTAMP, 'localtime') AS INTEGER) AS dow, "
+		"CAST(strftime('%H', a.TIMESTAMP, 'localtime') AS INTEGER) AS hour, "
+		"SUM(COALESCE(a.ACTIVE_DURATION, a.DURATION, 0)) AS sec "
+		"FROM Activities a "
+		"WHERE a.TIMESTAMP >= DATE('now', 'localtime', ? || ' days') "
+		"GROUP BY dow, hour ORDER BY dow, hour;";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+		std::string offset = "-" + std::to_string(days < 1 ? 1 : days);
+		sqlite3_bind_text(stmt, 1, offset.c_str(), -1, SQLITE_TRANSIENT);
+		while (sqlite3_step(stmt) == SQLITE_ROW) {
+			json o;
+			o["dow"]     = sqlite3_column_int(stmt, 0);
+			o["hour"]    = sqlite3_column_int(stmt, 1);
+			o["seconds"] = sqlite3_column_int(stmt, 2);
+			buckets.push_back(std::move(o));
+		}
+		sqlite3_finalize(stmt);
+	}
+	return json{{"days", days}, {"buckets", buckets}};
+}
+
+nlohmann::json DatabaseManager::getWeeklyReviewData(const std::string& weekStart) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	json result;
+	result["weekStart"]     = weekStart;
+	result["totalSec"]      = 0;
+	result["productiveSec"] = 0;
+	result["topApps"]       = json::array();
+
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql =
+		"SELECT a.PROCESS, "
+		"       SUM(COALESCE(a.ACTIVE_DURATION, a.DURATION, 0)) AS sec, "
+		"       COALESCE(MAX(k.SCORE), 0) AS score "
+		"FROM Activities a "
+		"LEFT JOIN KnowledgeBase k ON k.PROCESS = a.PROCESS "
+		"WHERE DATE(a.TIMESTAMP, 'localtime') >= COALESCE(NULLIF(?, ''), DATE('now', 'localtime', '-7 days')) "
+		"  AND DATE(a.TIMESTAMP, 'localtime') <  DATE(COALESCE(NULLIF(?, ''), DATE('now', 'localtime', '-7 days')), '+7 days') "
+		"GROUP BY a.PROCESS ORDER BY sec DESC LIMIT 10;";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+		sqlite3_bind_text(stmt, 1, weekStart.c_str(), -1, SQLITE_TRANSIENT);
+		sqlite3_bind_text(stmt, 2, weekStart.c_str(), -1, SQLITE_TRANSIENT);
+		long long total = 0, productive = 0;
+		json apps = json::array();
+		while (sqlite3_step(stmt) == SQLITE_ROW) {
+			const char* p = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+			int sec = sqlite3_column_int(stmt, 1);
+			int sc  = sqlite3_column_int(stmt, 2);
+			total += sec;
+			if (sc > 0) productive += sec;
+			apps.push_back({{"process", p ? p : ""}, {"seconds", sec}, {"score", sc}});
+		}
+		sqlite3_finalize(stmt);
+		result["totalSec"]      = total;
+		result["productiveSec"] = productive;
+		result["topApps"]       = apps;
+	}
+	return result;
+}
+
+bool DatabaseManager::saveWeeklyReview(const std::string& weekStart, int totalSec, int productiveSec,
+									   const std::string& topAppsJson, const std::string& narrative) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql = "INSERT OR REPLACE INTO WeeklyReviews "
+					  "(WEEK_START, TOTAL_SEC, PRODUCTIVE_SEC, TOP_APPS_JSON, NARRATIVE) "
+					  "VALUES (?, ?, ?, ?, ?);";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+	sqlite3_bind_text(stmt, 1, weekStart.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int(stmt, 2, totalSec);
+	sqlite3_bind_int(stmt, 3, productiveSec);
+	sqlite3_bind_text(stmt, 4, topAppsJson.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 5, narrative.c_str(), -1, SQLITE_TRANSIENT);
+	bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+	sqlite3_finalize(stmt);
+	return ok;
+}
+
+nlohmann::json DatabaseManager::getTimeToGoalEstimate(const std::string& goalId, int targetMinutes) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	json result;
+	result["goalId"]           = goalId;
+	result["targetMinutes"]    = targetMinutes;
+	result["doneMinutes"]      = 0;
+	result["remainingMinutes"] = targetMinutes;
+	result["dailyAvgMinutes"]  = 0;
+	result["etaDays"]          = nullptr;
+
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql =
+		"SELECT COALESCE(SUM(COALESCE(a.ACTIVE_DURATION, a.DURATION, 0)), 0) AS sec, "
+		"       COUNT(DISTINCT DATE(a.TIMESTAMP, 'localtime')) AS days "
+		"FROM Activities a "
+		"JOIN AppGoalLinks g ON g.PROCESS = a.PROCESS "
+		"WHERE g.GOAL_ID = ? "
+		"  AND a.TIMESTAMP >= DATE('now', 'localtime', '-14 days');";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+		sqlite3_bind_text(stmt, 1, goalId.c_str(), -1, SQLITE_TRANSIENT);
+		if (sqlite3_step(stmt) == SQLITE_ROW) {
+			long long sec = sqlite3_column_int64(stmt, 0);
+			int       d   = sqlite3_column_int(stmt, 1);
+			int doneMin   = (int)(sec / 60);
+			result["doneMinutes"]   = doneMin;
+			int remain    = targetMinutes - doneMin;
+			if (remain < 0) remain = 0;
+			result["remainingMinutes"] = remain;
+			if (d > 0) {
+				double avg = (double)doneMin / (double)d;
+				result["dailyAvgMinutes"] = avg;
+				if (avg > 0.0 && remain > 0) {
+					result["etaDays"] = (int)std::ceil((double)remain / avg);
+				}
+			}
+		}
+		sqlite3_finalize(stmt);
+	}
+	return result;
+}
+
+nlohmann::json DatabaseManager::getBedtime() {
+	std::string raw = getSetting("bedtime", "");
+	json o;
+	o["hour"]        = 23;
+	o["minute"]      = 0;
+	o["warnMinutes"] = 30;
+	o["enabled"]     = false;
+	if (!raw.empty()) {
+		try {
+			json parsed = json::parse(raw);
+			if (parsed.is_object()) {
+				if (parsed.contains("hour"))        o["hour"]        = parsed["hour"];
+				if (parsed.contains("minute"))      o["minute"]      = parsed["minute"];
+				if (parsed.contains("warnMinutes")) o["warnMinutes"] = parsed["warnMinutes"];
+				o["enabled"] = true;
+			}
+		} catch (...) {}
+	}
+	return o;
+}
+
+bool DatabaseManager::setBedtime(int hour, int minute, int warnMinutes) {
+	json o = {{"hour", hour}, {"minute", minute}, {"warnMinutes", warnMinutes}};
+	return setSetting("bedtime", o.dump());
+}
+
+nlohmann::json DatabaseManager::getTriggerTransitions(int days, int limit) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	json arr = json::array();
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql =
+		"WITH ordered AS ("
+		"  SELECT PROCESS, TIMESTAMP, "
+		"         LAG(PROCESS) OVER (ORDER BY TIMESTAMP) AS prev_proc "
+		"  FROM Activities "
+		"  WHERE TIMESTAMP >= DATE('now', 'localtime', ? || ' days')"
+		") "
+		"SELECT prev_proc AS fromProc, PROCESS AS toProc, COUNT(*) AS cnt "
+		"FROM ordered "
+		"WHERE prev_proc IS NOT NULL AND prev_proc <> PROCESS "
+		"GROUP BY prev_proc, PROCESS "
+		"ORDER BY cnt DESC LIMIT ?;";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+		std::string offset = "-" + std::to_string(days < 1 ? 1 : days);
+		sqlite3_bind_text(stmt, 1, offset.c_str(), -1, SQLITE_TRANSIENT);
+		sqlite3_bind_int(stmt, 2, limit < 1 ? 12 : limit);
+		while (sqlite3_step(stmt) == SQLITE_ROW) {
+			json o;
+			const unsigned char* f = sqlite3_column_text(stmt, 0);
+			const unsigned char* t = sqlite3_column_text(stmt, 1);
+			o["from"]  = f ? reinterpret_cast<const char*>(f) : "";
+			o["to"]    = t ? reinterpret_cast<const char*>(t) : "";
+			o["count"] = sqlite3_column_int(stmt, 2);
+			arr.push_back(std::move(o));
+		}
+		sqlite3_finalize(stmt);
+	}
+	return arr;
+}
+
+nlohmann::json DatabaseManager::getActivityHeatmap(int days) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	json cells = json::array();
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql =
+		"SELECT DATE(a.TIMESTAMP, 'localtime') AS day, "
+		"       CAST(strftime('%H', a.TIMESTAMP, 'localtime') AS INTEGER) AS hour, "
+		"       SUM(COALESCE(a.ACTIVE_DURATION, a.DURATION, 0)) AS active_sec, "
+		"       SUM(COALESCE(a.DURATION, 0)) AS total_sec "
+		"FROM Activities a "
+		"WHERE a.TIMESTAMP >= DATE('now', 'localtime', ? || ' days') "
+		"GROUP BY day, hour "
+		"ORDER BY day, hour;";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+		std::string offset = "-" + std::to_string(days < 1 ? 1 : days);
+		sqlite3_bind_text(stmt, 1, offset.c_str(), -1, SQLITE_TRANSIENT);
+		while (sqlite3_step(stmt) == SQLITE_ROW) {
+			json o;
+			const unsigned char* d = sqlite3_column_text(stmt, 0);
+			o["day"]    = d ? reinterpret_cast<const char*>(d) : "";
+			o["hour"]   = sqlite3_column_int(stmt, 1);
+			o["active"] = sqlite3_column_int(stmt, 2);
+			o["total"]  = sqlite3_column_int(stmt, 3);
+			cells.push_back(std::move(o));
+		}
+		sqlite3_finalize(stmt);
+	}
+	return json{{"days", days}, {"cells", cells}};
+}
+
+bool DatabaseManager::setDailyBudget(const std::string& process, int seconds) {
+	return setSetting("budget:" + process, std::to_string(seconds));
+}
+
+int DatabaseManager::getDailyBudget(const std::string& process) {
+	std::string v = getSetting("budget:" + process, "");
+	if (v.empty()) return 0;
+	try { return std::stoi(v); } catch (...) { return 0; }
+}
+
+nlohmann::json DatabaseManager::getDailyBudgets() {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	json arr = json::array();
+	sqlite3_stmt* stmt = nullptr;
+	if (sqlite3_prepare_v2(db, "SELECT KEY, VALUE FROM AppSettings WHERE KEY LIKE 'budget:%';", -1, &stmt, nullptr) == SQLITE_OK) {
+		while (sqlite3_step(stmt) == SQLITE_ROW) {
+			const unsigned char* k = sqlite3_column_text(stmt, 0);
+			const unsigned char* v = sqlite3_column_text(stmt, 1);
+			if (!k) continue;
+			std::string key = reinterpret_cast<const char*>(k);
+			std::string proc = key.substr(7); // skip "budget:"
+			int sec = 0;
+			try { sec = v ? std::stoi(reinterpret_cast<const char*>(v)) : 0; } catch (...) {}
+			arr.push_back({{"process", proc}, {"seconds", sec}});
+		}
+		sqlite3_finalize(stmt);
+	}
+	return arr;
+}
+
+int DatabaseManager::getTodayUsageSeconds(const std::string& process) {
+	std::lock_guard<std::mutex> lock(db_mutex);
+	int total = 0;
+	sqlite3_stmt* stmt = nullptr;
+	const char* sql =
+		"SELECT COALESCE(SUM(COALESCE(ACTIVE_DURATION, DURATION, 0)), 0) "
+		"FROM Activities "
+		"WHERE PROCESS = ? AND DATE(TIMESTAMP, 'localtime') = DATE('now', 'localtime');";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+		sqlite3_bind_text(stmt, 1, process.c_str(), -1, SQLITE_TRANSIENT);
+		if (sqlite3_step(stmt) == SQLITE_ROW) total = sqlite3_column_int(stmt, 0);
+		sqlite3_finalize(stmt);
+	}
+	return total;
+}
+
+nlohmann::json DatabaseManager::getDailyBudgetStatus() {
+	json budgets = getDailyBudgets();
+	json arr = json::array();
+	if (!budgets.is_array()) return arr;
+	for (auto& b : budgets) {
+		std::string proc = b.value("process", "");
+		int limit        = b.value("seconds", 0);
+		if (proc.empty()) continue;
+		int used = getTodayUsageSeconds(proc);
+		double ratio = (limit > 0) ? (double)used / (double)limit : 0.0;
+		json o;
+		o["process"]   = proc;
+		o["limit"]     = limit;
+		o["used"]      = used;
+		o["remaining"] = (limit > used) ? (limit - used) : 0;
+		o["ratio"]     = ratio;
+		arr.push_back(std::move(o));
+	}
+	return arr;
 }

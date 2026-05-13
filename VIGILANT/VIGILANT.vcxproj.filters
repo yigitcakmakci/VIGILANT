@@ -144,6 +144,9 @@
     <ClCompile Include="src\AI\GoalManager.cpp">
       <Filter>Kaynak Dosyalar</Filter>
     </ClCompile>
+    <ClCompile Include="src\Core\FocusGuard.cpp">
+      <Filter>Kaynak Dosyalar</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\AI\AIClassifierTask.hpp">
@@ -222,6 +225,9 @@
       <Filter>Ust Bilgi Dosyalari</Filter>
     </ClInclude>
     <ClInclude Include="include\AI\GoalManager.hpp">
+      <Filter>Ust Bilgi Dosyalari</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Core\FocusGuard.hpp">
       <Filter>Ust Bilgi Dosyalari</Filter>
     </ClInclude>
   </ItemGroup>
@@ -306,7 +312,7 @@
     <None Include="ts\interview\goal-tree-schema.ts" />
     <None Include="ts\interview\goal-tree-types.ts" />
     <None Include="ts\interview\goal-tree-ui.ts" />
-    <None Include="VIGILANT\ts\interview\goal-tree-replanner.ts" />
+    <None Include="ts\interview\goal-tree-replanner.ts" />
     <None Include="ts\interview\auto-ticker-types.ts" />
     <None Include="ts\interview\auto-ticker-ui.ts" />
     <None Include="ts\interview\auto-ticker-tick-types.ts" />
@@ -319,6 +325,7 @@
     <None Include="ts\interview\goals-chat-controller.ts" />
     <None Include="web\js\goals-chat-bundle.js" />
     <None Include="web\js\goal-tree-bundle.js" />
+    <None Include="tools\patch_dbm.ps1" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resources\VIGILANT.rc">

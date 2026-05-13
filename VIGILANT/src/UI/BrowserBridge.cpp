@@ -34,9 +34,19 @@ std::string BrowserBridge::GetActiveURL(HWND hwnd) {
                 VARIANT varValue;
                 // 4. Değeri (URL'yi) çek
                 if (SUCCEEDED(pEditBox->GetCurrentPropertyValue(UIA_ValueValuePropertyId, &varValue))) {
-                    // BSTR türünden string'e çevrim
-                    std::wstring ws(varValue.bstrVal);
-                    result = std::string(ws.begin(), ws.end());
+                    // BSTR (UTF-16) -> UTF-8 (Unicode-safe; Türkçe / non-ASCII URL'leri korur)
+                    if (varValue.vt == VT_BSTR && varValue.bstrVal) {
+                        const wchar_t* w = varValue.bstrVal;
+                        int wlen = SysStringLen(varValue.bstrVal);
+                        if (wlen > 0) {
+                            int u8len = WideCharToMultiByte(CP_UTF8, 0, w, wlen, nullptr, 0, nullptr, nullptr);
+                            if (u8len > 0) {
+                                std::string utf8(u8len, '\0');
+                                WideCharToMultiByte(CP_UTF8, 0, w, wlen, &utf8[0], u8len, nullptr, nullptr);
+                                result = std::move(utf8);
+                            }
+                        }
+                    }
                     VariantClear(&varValue);
                 }
                 pEditBox->Release();

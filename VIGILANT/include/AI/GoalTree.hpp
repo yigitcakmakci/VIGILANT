@@ -842,6 +842,14 @@ struct ActionItem {
     bool        isCompleted = false;
 };
 
+// Branch-only "Sis Dağıtıcı" / Unknown-Unknowns marker.
+// One concrete technical/legal/financial/logistic obstacle the user is
+// likely unaware of on the path of this goal branch.
+struct Obstacle {
+    std::string title;
+    std::string detail;
+};
+
 struct GoalNode {
     std::string              id;
     std::string              title;
@@ -849,6 +857,7 @@ struct GoalNode {
     int                      progress = 0;       // 0-100
     bool                     isLeaf   = false;
     std::string              acceptanceCriteria;  // required when isLeaf
+    Obstacle                 obstacle;            // required when !isLeaf
     std::vector<GoalNode>    children;
     std::vector<ActionItem>  actionItems;         // atomic action steps
 };
@@ -875,6 +884,64 @@ inline const std::string SYSTEM_PROMPT = R"PROMPT(Sen bir hedef analiz ve decomp
 Kullanıcının hedefini analiz et ve onu özyinelemeli (recursive) bir GoalNode ağacına dönüştür.
 Ağacın derinliği hedefin büyüklüğüne, karmaşıklığına VE kullanıcının mülakatında belirttiği
 zaman kısıtına göre dinamik olarak belirlenecek. Bu kararı SEN otonom olarak vermelisin.
+
+# ════════════════════════════════════════════════════════════════════
+# KESİN KURALLAR — JSON üretirken bunların DIŞINA ASLA ÇIKMA
+# ════════════════════════════════════════════════════════════════════
+
+## KURAL 1 — Meta-Planlama Yasaktır
+Asla "Plan oluştur", "Bir plan yap", "Araştırma yap", "Kaynak bul",
+"İlk adımı at", "Strateji belirle", "Yol haritası çıkar", "Hazırlık yap",
+"Bilgi topla", "Konuyu öğren", "Başlamaya karar ver" gibi
+JENERİK ve EYLEMSİZ maddeler ÜRETME. Kullanıcı zaten plan yapmak için
+buradadır; planın PLANINI üretmek YASAKTIR.
+Her title ve actionItem somut bir fiziksel/dijital eylemle başlamalı:
+"oku", "izle", "yaz", "tıkla", "indir", "telefon et", "tekrarla", "egzersiz yap" vb.
+
+## KURAL 2 — İsim ve Adres Ver (Hyper-Specific)
+Her madde, doğrudan icra edilebilecek kadar SPESİFİK olmalıdır.
+Ürün adı, kanun adı, kurum adı, ekran adı, sayı, ölçü, isim ver.
+Belirsiz bir madde gördüğünde "Bunu şimdi açıp yapabilir miyim?"
+sorusuna EVET denemiyorsa madde yanlıştır.
+
+Örnekler (sadece KURALı öğretmek için, ASLA bu konuları üretme):
+  - "Akorları öğren" YANLIŞ.
+    "Am, C ve G açık akorlarının parmak pozisyonlarını ezberle" DOĞRU.
+  - "Yasal süreci araştır" YANLIŞ.
+    "29 yaş altı Genç Girişimci İstisnası şartlarını oku ve e-Devlet
+    üzerinden şahıs şirketi başvuru ekranını bul" DOĞRU.
+  - "Antrenman planı yap" YANLIŞ.
+    "Pazartesi-Çarşamba-Cuma için 5x5 squat + 3x8 bench press programını
+    yaz" DOĞRU.
+
+Eğer kullanıcının verdiği bilgi spesifik isimleri çıkarmak için yetmiyorsa,
+o alana GİRMEDİĞİNDEN dolayı SPEKÜLE etme; kullanıcının kelimelerine sadık
+kalarak elinden geldiği kadar ad/araç/kanun/ekran adı ver.
+
+## KURAL 3 — Sis Dağıtıcı (Unknown Unknowns)
+Her dal düğümünün (isLeaf===false) içine, kullanıcının muhtemelen
+BİLMEDİĞİ ama o yolda tökezlemesine yol açacak TAM 1 adet spesifik
+teknik veya yasal bariyeri "obstacle" alanı olarak ekle.
+Format:
+  "obstacle": {
+    "title":  "<engelin kısa adı>",
+    "detail": "<neden bir tuzak olduğunun 1-2 cümlelik açıklaması>"
+  }
+Bu engel, jenerik motivasyon uyarısı OLAMAZ ("zorlanabilirsin", "sabırlı ol" vs).
+Mutlaka somut bir teknik / yasal / finansal / lojistik kapan olmalı:
+örn. KDV mükellefiyeti eşiği, lisans gereksinimi, donanım uyumsuzluğu,
+API rate limit, müsait olmayan saatler, başvuru takvimi penceresi vb.
+
+## KURAL 4 — Atomik Eylem
+Her actionItem (yaprak düğümün altındaki maddeler), bilgisayar başında
+veya masada MAKSİMUM 1 SAAT içinde başlanıp bitirilebilecek kadar küçük
+ve net bir FİZİKSEL eylem olmalıdır.
+  - "X dakika çalış" gibi süre belirten ama içerik vermeyen maddeler YASAK.
+  - "Daha fazla X yap" gibi karşılaştırmalı ifadeler YASAK.
+  - Madde sahnenin içinde geçmeli: hangi pencere açık, hangi sayfa,
+    hangi araç elinde, hangi tuşa basılacak.
+
+# ════════════════════════════════════════════════════════════════════
 
 # DERİNLİK KURALLARI (Otonom Karar)
 - Kısa vadeli hedef (1-4 hafta): 2-3 seviye yeterli.
@@ -903,6 +970,8 @@ zaman kısıtına göre dinamik olarak belirlenecek. Bu kararı SEN otonom olara
   "description":        string,   // 1-2 cümle açıklama — kullanıcının verdiği bağlama özel
   "progress":           number,   // 0-100 (yeni ağaçta tüm düğümler 0)
   "isLeaf":             boolean,  // true = aksiyon yapılabilir yaprak görev
+  "obstacle":           Obstacle, // SADECE isLeaf===false ise ZORUNLU.  KURAL 3 gereği.
+                                   // { "title": string, "detail": string }
   "acceptanceCriteria": string,   // SADECE isLeaf===true ise ZORUNLU ve boş olamaz.
                                    // Somut, doğrulanabilir, mülakata dayalı tamamlanma kriteri.
   "children":           GoalNode[] // isLeaf===false ise ZORUNLU ve en az 1 eleman.
@@ -924,8 +993,8 @@ zaman kısıtına göre dinamik olarak belirlenecek. Bu kararı SEN otonom olara
 Bir GoalNode üretirken, özellikle en alt seviyede (isLeaf: true), o görevin nasıl
 yapılacağını anlatan en az 3, en fazla 5 adet atomik aksiyon maddesi (actionItems) ekle.
 Bu maddeler genel ifadeler olmamalı; doğrudan fiziksel veya dijital bir hamle
-tanımlamalıdır. Her actionItem şu formatta olmalı:
-  { "text": "<somut eylem>", "isCompleted": false }
+tanımlamalıdır (KURAL 4). Her actionItem şu formatta olmalı:
+  { "text": "<somut eylem — 1 saat içinde biter>", "isCompleted": false }
 actionItems dizisi isLeaf===true olan her düğümde ZORUNLUDUR.
 
 # GoalNode ŞEMASI (güncel)
@@ -936,11 +1005,14 @@ Yukarıdaki şemaya ek olarak her GoalNode şu alana da sahiptir:
 # KRİTİK KURALLAR
 1. Her yaprak düğümde (isLeaf: true) acceptanceCriteria MUTLAKA dolu olmalı.
    Bu anti-hallucination mekanizmasıdır — kritersiz görev tamamlanamaz.
-2. Dal düğümlerde (isLeaf: false) acceptanceCriteria OLMAMALI, children OLMALI.
+2. Dal düğümlerde (isLeaf: false) acceptanceCriteria OLMAMALI, children OLMALI,
+   ve KURAL 3 gereği "obstacle" alanı MUTLAKA dolu olmalı.
 3. Tüm id değerleri ağaç içinde benzersiz (unique) olmalı.
 4. progress alanı yeni ağaçta her zaman 0 olacak.
-5. Yaprak görevler somut, spesifik ve 1-3 gün içinde tamamlanabilir olmalı.
-6. Promptlarin icinde asla spesifik hedeflere dair ornekler verme. Sistem evrensel olmali.
+5. Yaprak görevler somut, spesifik (KURAL 2) ve 1-3 gün içinde tamamlanabilir olmalı;
+   altındaki actionItems ise her biri 1 saatte biter (KURAL 4).
+6. Her actionItem ve title KURAL 1 ile uyumlu olmalı: meta-planlama yasak,
+   doğrudan eyleme dönük fiil ile başlamalı.
 7. Her yaprak düğümde actionItems dizisi en az 3, en fazla 5 atomik madde içermeli.
 8. Türkçe yaz.)PROMPT";
 
@@ -1013,6 +1085,20 @@ inline GoalTreeValidation validateGoalNode(const nlohmann::json& j,
         if (j["children"].empty())
             return fail("Branch node: children must not be empty", path + ".children");
 
+        // Branch: obstacle REQUIRED (KURAL 3 — Sis Dağıtıcı / Unknown Unknowns)
+        if (!j.contains("obstacle") || !j["obstacle"].is_object())
+            return fail("Branch node: obstacle is REQUIRED and must be an object "
+                        "(KURAL 3 — Unknown Unknowns)", path + ".obstacle");
+        const auto& obs = j["obstacle"];
+        if (!obs.contains("title") || !obs["title"].is_string()
+            || obs["title"].get<std::string>().empty())
+            return fail("Branch node: obstacle.title is REQUIRED and must be non-empty",
+                        path + ".obstacle.title");
+        if (!obs.contains("detail") || !obs["detail"].is_string()
+            || obs["detail"].get<std::string>().empty())
+            return fail("Branch node: obstacle.detail is REQUIRED and must be non-empty",
+                        path + ".obstacle.detail");
+
         // Recurse into children
         for (size_t i = 0; i < j["children"].size(); ++i) {
             auto v = validateGoalNode(j["children"][i],
@@ -1069,7 +1155,18 @@ inline nlohmann::json goalNodeToJson(const GoalNode& n) {
     j["isLeaf"]      = n.isLeaf;
     if (n.isLeaf) {
         j["acceptanceCriteria"] = n.acceptanceCriteria;
+        j["actionItems"] = nlohmann::json::array();
+        for (const auto& a : n.actionItems) {
+            j["actionItems"].push_back({
+                { "text",        a.text },
+                { "isCompleted", a.isCompleted }
+            });
+        }
     } else {
+        j["obstacle"] = {
+            { "title",  n.obstacle.title  },
+            { "detail", n.obstacle.detail }
+        };
         j["children"] = nlohmann::json::array();
         for (const auto& c : n.children)
             j["children"].push_back(goalNodeToJson(c));
@@ -1085,9 +1182,21 @@ inline GoalNode goalNodeFromJson(const nlohmann::json& j) {
     n.progress    = j.value("progress", 0);
     n.isLeaf      = j.value("isLeaf", false);
     n.acceptanceCriteria = j.value("acceptanceCriteria", "");
+    if (j.contains("obstacle") && j["obstacle"].is_object()) {
+        n.obstacle.title  = j["obstacle"].value("title",  "");
+        n.obstacle.detail = j["obstacle"].value("detail", "");
+    }
     if (j.contains("children") && j["children"].is_array()) {
         for (const auto& c : j["children"])
             n.children.push_back(goalNodeFromJson(c));
+    }
+    if (j.contains("actionItems") && j["actionItems"].is_array()) {
+        for (const auto& a : j["actionItems"]) {
+            ActionItem ai;
+            ai.text        = a.value("text", "");
+            ai.isCompleted = a.value("isCompleted", false);
+            n.actionItems.push_back(std::move(ai));
+        }
     }
     return n;
 }

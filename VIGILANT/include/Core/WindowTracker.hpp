@@ -14,6 +14,9 @@ public:
     static bool IsPaused();
     // Yeni ekledik:
     static std::string GetProcessName(HWND hwnd);
+    // Kullanicinin son input olayindan bu yana gecen saniye (GetLastInputInfo bazli).
+    // Hata durumunda 0 doner.
+    static int GetIdleSeconds();
     static void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD dwEventThread, DWORD dwmsEventTime);
 
 private:

@@ -1,11 +1,13 @@
 #include <windows.h>
 #include "UI/WebViewManager.hpp"
 #include "UI/TrayManager.hpp"
+#include "Data/DatabaseManager.hpp"
 
 #define WM_WEBVIEW_RESIZE (WM_APP + 1)
 
 extern WebViewManager* g_WebViewManager;
 extern DWORD g_WebViewThreadId;
+extern DatabaseManager g_Vault;
 
 TrayManager g_TrayManager;
 
@@ -38,9 +40,17 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         break;
 
     case WM_CLOSE:
-        // Minimize to system tray instead of closing the application
-        ::ShowWindow(hWnd, SW_HIDE);
-        return 0;
+        // "Tray'e Küçült" ayarına göre davran
+        {
+            std::string mt = g_Vault.getSetting("ui.minimizeToTray", "1");
+            if (mt == "1" || mt == "true") {
+                ::ShowWindow(hWnd, SW_HIDE);
+                return 0;
+            }
+            // Aksi halde uygulamayı kapat
+            ::DestroyWindow(hWnd);
+            return 0;
+        }
 
     case WM_DESTROY:
         g_TrayManager.Destroy();

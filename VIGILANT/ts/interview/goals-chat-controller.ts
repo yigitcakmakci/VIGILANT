@@ -121,6 +121,7 @@ export class GoalsChatController {
 		const stLayout = document.getElementById('stLayout');
 		if (stLayout) stLayout.style.display = 'none';
 
+		this.armWatchdog();
 		publish({
 			type: 'GoalsChatStartRequested',
 			sessionId: '',
@@ -138,6 +139,8 @@ export class GoalsChatController {
 
 	// ── Send user message ──────────────────────────────────────────────
 	private _pendingFirstMessage: string | null = null;
+	private _watchdogId: number | null = null;
+	private _lastRequestId: string | null = null;
 
 	onSend(): void {
 		if (this._busy || !this._els.input) return;
@@ -159,21 +162,57 @@ export class GoalsChatController {
 		this.setInputEnabled(false);
 		this.showTyping();
 
+		const rid = nextRequestId();
+		this._lastRequestId = rid;
+		this.armWatchdog();
+
 		publish({
 			type: 'GoalsChatMessageSubmitted',
 			sessionId: this._sessionId,
-			requestId: nextRequestId(),
+			requestId: rid,
 			ts: new Date().toISOString(),
 			payload: { sessionId: this._sessionId, text },
 		});
 	}
 
+	private armWatchdog(): void {
+		this.clearWatchdog();
+		this._watchdogId = window.setTimeout(() => {
+			if (!this._busy) return;
+			this.hideTyping();
+			this._busy = false;
+			this.setInputEnabled(true);
+			this.appendBubble(
+				'AI yanıtı zaman aşımına uğradı. Lütfen tekrar dene veya yeni bir oturum başlat.',
+				'system',
+			);
+		}, 90000);
+	}
+	private clearWatchdog(): void {
+		if (this._watchdogId !== null) {
+			clearTimeout(this._watchdogId);
+			this._watchdogId = null;
+		}
+	}
+
 	// ── Handle backend response ────────────────────────────────────────
 	private handleBackend(env: BridgeEnvelope): void {
+		if (env.type === 'Error') {
+			const ep = env.payload as any;
+			const code = (ep && ep.code) || 'UNKNOWN';
+			if (code === 'DUPLICATE_REQUEST') return;
+			this.clearWatchdog();
+			this.hideTyping();
+			this._busy = false;
+			this.setInputEnabled(true);
+			this.appendBubble('Hata: ' + ((ep && ep.message) || code), 'system');
+			return;
+		}
 		if (env.type !== 'GoalsChatResponse') return;
 		const p = env.payload as unknown as GoalsChatPayload;
 		const rt = p.responseType;
 
+		this.clearWatchdog();
 		this.hideTyping();
 
 		if (rt === 'chatStarted' && p.sessionId) {

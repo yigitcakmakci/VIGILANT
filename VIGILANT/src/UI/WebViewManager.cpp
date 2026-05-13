@@ -11,6 +11,7 @@
 #include "AI/AutoTickerVersionGuard.hpp"
 #include "Utils/StartupManager.hpp"
 #include "Core/WindowTracker.hpp"
+#include "Core/FocusGuard.hpp"
 #include "Utils/json.hpp"
 #include "Utils/ResourceLoader.hpp"
 #include "resource.h"
@@ -893,6 +894,25 @@ std::string WebViewManager::HandleMessage(const std::string& message) {
                 interviewSessionId = j["payload"]["interviewSessionId"].get<std::string>();
             response = g_InterviewHandler.HandleGenerateGoalTree(requestId, interviewSessionId);
         }
+        // ── DEV: DevReplayLastInterview — re-run AI on most recent transcript ──
+        else if (message.find("DevReplayLastInterview") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] DevReplayLastInterview istegi alindi\n");
+            response = g_InterviewHandler.HandleDevReplayLastInterview(requestId);
+        }
+        // ── DEV: DevQuickPlan — bypass interview, plan from (goal/timeframe/level) ──
+        else if (message.find("DevQuickPlan") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] DevQuickPlan istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string goalText, timeframeText, levelText;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                if (p.contains("goal"))      goalText      = p["goal"].get<std::string>();
+                if (p.contains("timeframe")) timeframeText = p["timeframe"].get<std::string>();
+                if (p.contains("level"))     levelText     = p["level"].get<std::string>();
+            }
+            response = g_InterviewHandler.HandleDevQuickPlan(
+                requestId, goalText, timeframeText, levelText);
+        }
         // ── GoalTree: TickMicroTask ──
         else if (message.find("TickMicroTask") != std::string::npos) {
             OutputDebugStringW(L"[WebViewManager] TickMicroTask istegi alindi\n");
@@ -951,6 +971,441 @@ std::string WebViewManager::HandleMessage(const std::string& message) {
             };
             response = resp.dump();
         }
+        // ── GoalForest: UpdateGoalOrder (drag & drop reorder) ──
+        else if (message.find("UpdateGoalOrder") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] UpdateGoalOrder istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            int oldIndex = -1, newIndex = -1;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                if (p.contains("oldIndex") && p["oldIndex"].is_number_integer())
+                    oldIndex = p["oldIndex"].get<int>();
+                if (p.contains("newIndex") && p["newIndex"].is_number_integer())
+                    newIndex = p["newIndex"].get<int>();
+            }
+
+            bool reordered = false;
+            if (oldIndex >= 0 && newIndex >= 0) {
+                reordered = g_GoalManager.reorderGoal(
+                    static_cast<size_t>(oldIndex),
+                    static_cast<size_t>(newIndex));
+            }
+
+            nlohmann::json resp;
+            resp["type"]      = "GoalOrderUpdated";
+            resp["requestId"] = requestId;
+            resp["ts"]        = j.value("ts", "");
+            resp["payload"]   = {
+                {"oldIndex", oldIndex},
+                {"newIndex", newIndex},
+                {"success",  reordered}
+            };
+            response = resp.dump();
+        }
+        // ── GoalForest: SubmitManualGoalTree (manual planning, no AI) ──
+        else if (message.find("SubmitManualGoalTree") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] SubmitManualGoalTree istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            nlohmann::json resp;
+            resp["type"]      = "ManualGoalTreeSubmitted";
+            resp["requestId"] = requestId;
+            resp["ts"]        = j.is_discarded() ? "" : j.value("ts", "");
+
+            if (j.is_discarded() || !j.contains("payload") || !j["payload"].is_object()
+                || !j["payload"].contains("goalTree") || !j["payload"]["goalTree"].is_object()) {
+                resp["payload"] = {
+                    {"success", false},
+                    {"error",   "missing payload.goalTree"}
+                };
+                response = resp.dump();
+            } else {
+                auto tree = j["payload"]["goalTree"];
+
+                // Defaults so the caller doesn't have to recompute every header.
+                if (!tree.contains("version")) tree["version"] = 2;
+                if (!tree.contains("session_id") || tree["session_id"].get<std::string>().empty()) {
+                    char sidBuf[64];
+                    sprintf_s(sidBuf, "manual-%llu",
+                              (unsigned long long)GetTickCount64());
+                    tree["session_id"] = sidBuf;
+                }
+                if (!tree.contains("generated_at") || tree["generated_at"].get<std::string>().empty()) {
+                    SYSTEMTIME st; GetSystemTime(&st);
+                    char tsBuf[64];
+                    sprintf_s(tsBuf, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
+                              st.wYear, st.wMonth, st.wDay,
+                              st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+                    tree["generated_at"] = tsBuf;
+                }
+
+                auto v = DynamicGoalTreeSchema::validate(tree);
+                if (!v.ok) {
+                    resp["payload"] = {
+                        {"success", false},
+                        {"error",   v.error},
+                        {"path",    v.path}
+                    };
+                    response = resp.dump();
+                } else {
+                    g_GoalManager.addGoal(tree);
+                    g_GoalManager.broadcastSummary();
+                    resp["payload"] = {
+                        {"success",  true},
+                        {"goalTree", tree}
+                    };
+                    response = resp.dump();
+                }
+            }
+        }
+        // ── FocusGuard: GetFocusGuardPolicy ──
+        else if (message.find("GetFocusGuardPolicy") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] GetFocusGuardPolicy istegi alindi\n");
+            nlohmann::json resp;
+            resp["type"]      = "FocusGuardPolicy";
+            resp["requestId"] = requestId;
+            resp["payload"]   = {
+                {"policy", FocusGuard::PolicyToString(g_FocusGuard.GetPolicy())}
+            };
+            response = resp.dump();
+        }
+        // ── FocusGuard: SetFocusGuardPolicy ──
+        else if (message.find("SetFocusGuardPolicy") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] SetFocusGuardPolicy istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string policyStr = "none";
+            if (!j.is_discarded() && j.contains("payload") && j["payload"].contains("policy"))
+                policyStr = j["payload"]["policy"].get<std::string>();
+            auto p = FocusGuard::ParsePolicy(policyStr);
+            g_FocusGuard.SetPolicy(p);
+
+            nlohmann::json resp = {
+                {"type", "FocusGuardPolicySet"},
+                {"requestId", requestId},
+                {"payload", {{"success", true}, {"policy", FocusGuard::PolicyToString(p)}}}
+            };
+            response = resp.dump();
+        }
+        // ── Batch B/C: LinkAppToGoal ──
+        else if (message.find("LinkAppToGoal") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string proc, titlePat, goalId, goalTitle;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                proc      = p.value("process", "");
+                titlePat  = p.value("titlePattern", "");
+                goalId    = p.value("goalId", "");
+                goalTitle = p.value("goalTitle", "");
+            }
+            bool ok = g_Vault.linkAppToGoal(proc, titlePat, goalId, goalTitle);
+            nlohmann::json resp = {
+                {"type", "AppGoalLinkResult"}, {"requestId", requestId},
+                {"payload", {{"success", ok}}}
+            };
+            response = resp.dump();
+        }
+        // ── Batch B/C: UnlinkAppFromGoal ──
+        else if (message.find("UnlinkAppFromGoal") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string proc, titlePat, goalId;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                proc     = p.value("process", "");
+                titlePat = p.value("titlePattern", "");
+                goalId   = p.value("goalId", "");
+            }
+            bool ok = g_Vault.unlinkAppFromGoal(proc, titlePat, goalId);
+            nlohmann::json resp = {
+                {"type", "AppGoalLinkResult"}, {"requestId", requestId},
+                {"payload", {{"success", ok}}}
+            };
+            response = resp.dump();
+        }
+        // ── Batch B/C: GetAppGoalLinks ──
+        else if (message.find("GetAppGoalLinks") != std::string::npos) {
+            nlohmann::json resp = {
+                {"type", "AppGoalLinks"}, {"requestId", requestId},
+                {"payload", g_Vault.getAppGoalLinks()}
+            };
+            response = resp.dump();
+        }
+        // ── Batch B/C: SetDigitalDietTag ──
+        else if (message.find("SetDigitalDietTag") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string proc, tag, note;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                proc = p.value("process", "");
+                tag  = p.value("tag", "neutral");
+                note = p.value("note", "");
+            }
+            bool ok = g_Vault.setDigitalDietTag(proc, tag, note);
+            nlohmann::json resp = {
+                {"type", "DigitalDietTagResult"}, {"requestId", requestId},
+                {"payload", {{"success", ok}}}
+            };
+            response = resp.dump();
+        }
+        // ── Batch B/C: GetDigitalDietTags ──
+        else if (message.find("GetDigitalDietTags") != std::string::npos) {
+            nlohmann::json resp = {
+                {"type", "DigitalDietTags"}, {"requestId", requestId},
+                {"payload", g_Vault.getDigitalDietTags()}
+            };
+            response = resp.dump();
+        }
+        // ── Batch B/C: LogIntent (soft-block prompt cevabi) ──
+        else if (message.find("LogIntent") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string proc, title, intent, outcome;
+            int durationHint = 0;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                proc         = p.value("process", "");
+                title        = p.value("windowTitle", "");
+                intent       = p.value("intent", "");
+                outcome      = p.value("outcome", "continue");
+                durationHint = p.value("durationHint", 0);
+            }
+            bool ok = g_Vault.logIntent(proc, title, intent, outcome, durationHint);
+            nlohmann::json resp = {
+                {"type", "IntentLogResult"}, {"requestId", requestId},
+                {"payload", {{"success", ok}}}
+            };
+            response = resp.dump();
+        }
+        // ── Batch B/C: GetPatternMirror ──
+        else if (message.find("GetPatternMirror") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            int days = 28;
+            if (!j.is_discarded() && j.contains("payload"))
+                days = j["payload"].value("days", 28);
+            nlohmann::json resp = {
+                {"type", "PatternMirror"}, {"requestId", requestId},
+                {"payload", g_Vault.getPatternMirror(days)}
+            };
+            response = resp.dump();
+        }
+        // ── Batch B/C: GetWeeklyReview ──
+        else if (message.find("GetWeeklyReview") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string weekStart;
+            if (!j.is_discarded() && j.contains("payload"))
+                weekStart = j["payload"].value("weekStart", "");
+            auto data = g_Vault.getWeeklyReviewData(weekStart);
+            // Narrative cache yoksa AI/fallback ile uret ve persist et.
+            if (!data.contains("narrative") || data["narrative"].is_null() ||
+                (data["narrative"].is_string() && data["narrative"].get<std::string>().empty())) {
+                std::string narrative = g_Gemini.generateWeeklyReviewNarrative(data);
+                data["narrative"] = narrative;
+                std::string ws = data.value("weekStart", weekStart);
+                int totalSec = data.value("totalSec", 0);
+                int prodSec  = data.value("productiveSec", 0);
+                std::string topJson = data.contains("topApps") ? data["topApps"].dump() : "[]";
+                g_Vault.saveWeeklyReview(ws, totalSec, prodSec, topJson, narrative);
+            }
+            nlohmann::json resp = {
+                {"type", "WeeklyReview"}, {"requestId", requestId},
+                {"payload", data}
+            };
+            response = resp.dump();
+        }
+        // ── Batch B/C: GetTimeToGoalEstimate ──
+        else if (message.find("GetTimeToGoalEstimate") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string goalId; int targetMin = 600;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                goalId    = p.value("goalId", "");
+                targetMin = p.value("targetMinutes", 600);
+            }
+            nlohmann::json resp = {
+                {"type", "TimeToGoalEstimate"}, {"requestId", requestId},
+                {"payload", g_Vault.getTimeToGoalEstimate(goalId, targetMin)}
+            };
+            response = resp.dump();
+        }
+        // ── Batch B/C: GetBedtime ──
+        else if (message.find("GetBedtime") != std::string::npos) {
+            nlohmann::json resp = {
+                {"type", "Bedtime"}, {"requestId", requestId},
+                {"payload", g_Vault.getBedtime()}
+            };
+            response = resp.dump();
+        }
+        // ── Batch B/C: SetBedtime ──
+        else if (message.find("SetBedtime") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            int hour = 23, minute = 0, warn = 30;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                hour   = p.value("hour", 23);
+                minute = p.value("minute", 0);
+                warn   = p.value("warnMinutes", 30);
+            }
+            bool ok = g_Vault.setBedtime(hour, minute, warn);
+            nlohmann::json resp = {
+                {"type", "BedtimeResult"}, {"requestId", requestId},
+                {"payload", {{"success", ok}, {"bedtime", g_Vault.getBedtime()}}}
+            };
+            response = resp.dump();
+        }
+        // ── Batch C: ProactiveCoach (tek cumlelik oneri) ──
+        else if (message.find("ProactiveCoach") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            nlohmann::json ctx = nlohmann::json::object();
+            if (!j.is_discarded() && j.contains("payload"))
+                ctx = j["payload"];
+            std::string line = g_Gemini.generateProactiveCoachLine(ctx);
+            nlohmann::json resp = {
+                {"type", "ProactiveCoachLine"}, {"requestId", requestId},
+                {"payload", {{"text", line}}}
+            };
+            response = resp.dump();
+        }
+        // ── Batch D: GetTriggerTransitions ──
+        else if (message.find("GetTriggerTransitions") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            int days = 14, limit = 12;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                days  = p.value("days",  14);
+                limit = p.value("limit", 12);
+            }
+            nlohmann::json resp = {
+                {"type", "TriggerTransitions"}, {"requestId", requestId},
+                {"payload", g_Vault.getTriggerTransitions(days, limit)}
+            };
+            response = resp.dump();
+        }
+        // ── Batch D: GetActivityHeatmap ──
+        else if (message.find("GetActivityHeatmap") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            int days = 30;
+            if (!j.is_discarded() && j.contains("payload"))
+                days = j["payload"].value("days", 30);
+            nlohmann::json resp = {
+                {"type", "ActivityHeatmap"}, {"requestId", requestId},
+                {"payload", g_Vault.getActivityHeatmap(days)}
+            };
+            response = resp.dump();
+        }
+        // ── Batch D: GetDailyBudgets ──
+        else if (message.find("GetDailyBudgetStatus") != std::string::npos) {
+            nlohmann::json resp = {
+                {"type", "DailyBudgetStatus"}, {"requestId", requestId},
+                {"payload", g_Vault.getDailyBudgetStatus()}
+            };
+            response = resp.dump();
+        }
+        else if (message.find("GetDailyBudgets") != std::string::npos) {
+            nlohmann::json resp = {
+                {"type", "DailyBudgets"}, {"requestId", requestId},
+                {"payload", g_Vault.getDailyBudgets()}
+            };
+            response = resp.dump();
+        }
+        // ── Batch D: SetDailyBudget ──
+        else if (message.find("SetDailyBudget") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string proc; int sec = 0;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                proc = p.value("process",   std::string(""));
+                sec  = p.value("limitSec",  0);
+            }
+            bool ok = g_Vault.setDailyBudget(proc, sec);
+            nlohmann::json resp = {
+                {"type", "DailyBudgetResult"}, {"requestId", requestId},
+                {"payload", {{"success", ok}, {"budgets", g_Vault.getDailyBudgetStatus()}}}
+            };
+            response = resp.dump();
+        }
+        // ── Batch D: SuggestAppGoalLinks (AI önerisi) ──
+        else if (message.find("SuggestAppGoalLinks") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            nlohmann::json ctx = nlohmann::json::object();
+            if (!j.is_discarded() && j.contains("payload"))
+                ctx = j["payload"];
+            nlohmann::json suggestions = g_Gemini.suggestAppGoalLinks(ctx);
+            nlohmann::json resp = {
+                {"type", "AppGoalLinkSuggestions"}, {"requestId", requestId},
+                {"payload", suggestions}
+            };
+            response = resp.dump();
+        }
+        // ── Generic AppSettings: GetSetting ──
+        else if (message.find("GetSetting") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string key, def;
+            if (!j.is_discarded() && j.contains("payload")) {
+                key = j["payload"].value("key", std::string(""));
+                def = j["payload"].value("default", std::string(""));
+            }
+            std::string val = g_Vault.getSetting(key, def);
+            nlohmann::json resp = {
+                {"type", "SettingValue"}, {"requestId", requestId},
+                {"payload", {{"key", key}, {"value", val}}}
+            };
+            response = resp.dump();
+        }
+        // ── Generic AppSettings: SetSetting ──
+        else if (message.find("SetSetting") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string key, val;
+            if (!j.is_discarded() && j.contains("payload")) {
+                key = j["payload"].value("key", std::string(""));
+                val = j["payload"].value("value", std::string(""));
+            }
+            bool ok = !key.empty() && g_Vault.setSetting(key, val);
+            nlohmann::json resp = {
+                {"type", "SettingResult"}, {"requestId", requestId},
+                {"payload", {{"success", ok}, {"key", key}, {"value", val}}}
+            };
+            response = resp.dump();
+        }
+        // ── Veri Dışa Aktarma (CSV/JSON) ──
+        else if (message.find("ExportActivities") != std::string::npos) {
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string fmt = "json";
+            int limit = 5000;
+            if (!j.is_discarded() && j.contains("payload")) {
+                fmt = j["payload"].value("format", std::string("json"));
+                limit = j["payload"].value("limit", 5000);
+            }
+            auto logs = g_Vault.getRecentLogs(limit);
+            std::string body;
+            if (fmt == "csv") {
+                body = "process,title,category,score,duration,source\n";
+                for (const auto& l : logs) {
+                    auto esc = [](const std::string& s) {
+                        std::string out; out.reserve(s.size() + 2);
+                        bool quote = s.find_first_of(",\"\n") != std::string::npos;
+                        if (quote) out.push_back('"');
+                        for (char c : s) { if (c == '"') out.push_back('"'); out.push_back(c); }
+                        if (quote) out.push_back('"');
+                        return out;
+                    };
+                    body += esc(l.process) + "," + esc(l.title) + "," + esc(l.category) + ","
+                          + std::to_string(l.score) + "," + std::to_string(l.duration) + ","
+                          + esc(l.source) + "\n";
+                }
+            } else {
+                nlohmann::json arr = nlohmann::json::array();
+                for (const auto& l : logs) {
+                    arr.push_back({
+                        {"process", l.process}, {"title", l.title},
+                        {"category", l.category}, {"score", l.score},
+                        {"duration", l.duration}, {"source", l.source}
+                    });
+                }
+                body = arr.dump(2);
+            }
+            nlohmann::json resp = {
+                {"type", "ExportResult"}, {"requestId", requestId},
+                {"payload", {{"format", fmt}, {"count", (int)logs.size()}, {"body", body}}}
+            };
+            response = resp.dump();
+        }
         // ── GoalsChat: Start ──
         else if (message.find("GoalsChatStartRequested") != std::string::npos) {
             OutputDebugStringW(L"[WebViewManager] GoalsChatStartRequested alindi\n");
@@ -969,6 +1424,40 @@ std::string WebViewManager::HandleMessage(const std::string& message) {
                     text = p["text"].get<std::string>();
             }
             response = g_InterviewHandler.HandleGoalsChatMessage(requestId, sessionId, text);
+        }
+        // ── Tunnel Vision: LocalTaskQuery (local AI mentor) ──
+        else if (message.find("LocalTaskQuery") != std::string::npos) {
+            OutputDebugStringW(L"[WebViewManager] LocalTaskQuery istegi alindi\n");
+            auto j = nlohmann::json::parse(message, nullptr, false);
+            std::string taskId, taskTitle, userText;
+            if (!j.is_discarded() && j.contains("payload")) {
+                auto& p = j["payload"];
+                if (p.contains("taskId"))    taskId    = p["taskId"].get<std::string>();
+                if (p.contains("taskTitle")) taskTitle = p["taskTitle"].get<std::string>();
+                if (p.contains("text"))      userText  = p["text"].get<std::string>();
+            }
+
+            response = g_InterviewHandler.HandleLocalTaskQuery(
+                requestId, taskId, taskTitle, userText);
+
+            // If the AI produced new atomic action items, append them to the
+            // matching GoalNode in the forest. The mutation broadcasts a
+            // GoalTreeSummaryUpdated event automatically.
+            try {
+                auto resp = nlohmann::json::parse(response, nullptr, false);
+                if (!resp.is_discarded()
+                    && resp.contains("payload")
+                    && resp["payload"].value("success", false)
+                    && resp["payload"].contains("actionItems")
+                    && resp["payload"]["actionItems"].is_array()
+                    && !resp["payload"]["actionItems"].empty()) {
+
+                    g_GoalManager.appendActionItemsByNodeId(
+                        taskId, resp["payload"]["actionItems"], nullptr);
+                }
+            } catch (...) {
+                OutputDebugStringW(L"[WebViewManager] LocalTaskQuery: failed to apply action items\n");
+            }
         }
         // ── GoalTree: ReplanRequested ──
         else if (message.find("ReplanRequested") != std::string::npos) {

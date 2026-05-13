@@ -29,6 +29,21 @@ public:
 	/// Returns true if found and removed.
 	bool removeGoal(const std::string& rootNodeId);
 
+	/// Reorder the goal forest by moving the element at oldIndex to newIndex.
+	/// Uses std::rotate to shift neighbors. Returns true on success.
+	bool reorderGoal(size_t oldIndex, size_t newIndex);
+
+	/// Append a list of new action items to the GoalNode whose id matches
+	/// `nodeId` (deep-search across all goal trees in the forest).
+	/// `newItems` must be a JSON array of objects shaped like
+	///   { id?: string, text: string, isCompleted?: bool }
+	/// Returns true if the node was found and the items were appended.
+	/// On success, also broadcasts the updated forest via GoalTreeSummaryUpdated.
+	/// If `outNodeTitle` is non-null, it is set to the matched node's title.
+	bool appendActionItemsByNodeId(const std::string& nodeId,
+								   const nlohmann::json& newItems,
+								   std::string* outNodeTitle = nullptr);
+
 	/// Get all goal trees as a JSON array.
 	nlohmann::json getAllGoals() const;
 

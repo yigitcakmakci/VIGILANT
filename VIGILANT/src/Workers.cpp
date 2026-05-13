@@ -1,9 +1,13 @@
 ﻿#include <windows.h>
 #include <thread>
 #include <chrono>
+#include <unordered_set>
+#include <algorithm>
+#include <sstream>
 #include "Utils/EventQueue.hpp"
 #include "Utils/PerfCounters.hpp"
 #include "Data/DatabaseManager.hpp"
+#include "Core/WindowTracker.hpp"
 #include "UI/TrayManager.hpp"
 
 #define WM_WEBVIEW_NEWEVENT (WM_APP + 2)
@@ -16,7 +20,40 @@ extern DWORD g_WebViewThreadId;
 // Olaylari kuyruktan alir, batch transaction ile DB'ye yazar.
 // Batch kosulu: N event birikince VEYA T saniye dolunca (hangisi once).
 static constexpr int    kBatchMaxSize    = 10;
-static constexpr int    kBatchFlushMs    = 2000; // 2 saniye
+static constexpr int    kBatchFlushMs    = 2000;            // 2 saniye
+// pop_for timeout: flush periyodunun yarisi -> en kotu durumda flush gecikmesi
+// kBatchFlushMs/2 + epsilon kadar olur; CPU spin'e dusmeden sik kontrol saglar.
+static constexpr int    kQueuePopTimeoutMs = kBatchFlushMs / 2;
+
+// Hariç tutma listesi cache'i (AppSettings: "tracking.excludedProcesses" — virgülle ayrılmış)
+static std::unordered_set<std::string> s_excludedProcs;
+static std::chrono::steady_clock::time_point s_excludedLast{};
+static std::string ToLower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return (char)std::tolower(c); });
+    return s;
+}
+static void RefreshExcludedProcsIfNeeded() {
+    auto now = std::chrono::steady_clock::now();
+    if (s_excludedLast.time_since_epoch().count() != 0 &&
+        std::chrono::duration_cast<std::chrono::seconds>(now - s_excludedLast).count() < 5) return;
+    s_excludedLast = now;
+    std::string raw = g_Vault.getSetting("tracking.excludedProcesses", "");
+    s_excludedProcs.clear();
+    std::stringstream ss(raw);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        // trim
+        size_t a = item.find_first_not_of(" \t\r\n");
+        size_t b = item.find_last_not_of(" \t\r\n");
+        if (a == std::string::npos) continue;
+        std::string p = ToLower(item.substr(a, b - a + 1));
+        if (!p.empty()) s_excludedProcs.insert(p);
+    }
+}
+static bool IsProcessExcluded(const std::string& proc) {
+    if (s_excludedProcs.empty()) return false;
+    return s_excludedProcs.count(ToLower(proc)) > 0;
+}
 
 void BackgroundWorker()
 {
@@ -27,7 +64,7 @@ void BackgroundWorker()
     bool inTransaction = false;
 
     // pop_for timeout: half of batch flush interval so we check frequently
-    static constexpr int kPopTimeoutMs = kBatchFlushMs / 2;
+    static constexpr int kPopTimeoutMs = kQueuePopTimeoutMs;
 
     while (true)
     {
@@ -73,10 +110,25 @@ void BackgroundWorker()
                 now - lastTime).count();
             if (seconds > 0) {
                 g_Vault.updateDuration(lastActivityId, seconds);
+                // Aktif (idle olmayan) saniye: toplam - idle. Idle suresi
+                // pencereler arasi gecisi temsil eden simdiki ana yakin oldugundan
+                // kucuk degerlerde 0'a yaslanir; floor 0 ile guvende.
+                int idleSec = WindowTracker::GetIdleSeconds();
+                int activeSec = seconds - idleSec;
+                if (activeSec < 0) activeSec = 0;
+                if (activeSec > seconds) activeSec = seconds;
+                g_Vault.updateActiveDuration(lastActivityId, activeSec);
             }
         }
 
         // Yeni aktiviteyi kaydet (prepared statement - no prepare/finalize overhead)
+        RefreshExcludedProcsIfNeeded();
+        if (IsProcessExcluded(data.processName)) {
+            // Bu uygulama hariç tutulmuş; aktiviteyi kaydetme.
+            lastActivityId = -1;
+            lastTime = now;
+            continue;
+        }
         lastActivityId = g_Vault.logActivity(data);
         lastTime = now;
         batchCount++;

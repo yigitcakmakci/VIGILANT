@@ -65,6 +65,33 @@ public:
                                        const std::string& sessionId,
                                        const std::string& text);
 
+    // ── Tunnel Vision: Local AI Mentor for a single focused task ─────
+    // Sends the user's question to Gemini with a strict, task-scoped
+    // system prompt and asks the model to produce exactly 3 atomic
+    // action items the user can use to break the task down further.
+    // Returns a JSON string ready to post back to the WebView, with
+    // payload.actionItems = [{ id, text, isCompleted: false }, ...]
+    // and payload.aiText containing the natural-language explanation.
+    std::string HandleLocalTaskQuery(const std::string& requestId,
+                                     const std::string& taskId,
+                                     const std::string& taskTitle,
+                                     const std::string& userText);
+
+    // ── DEV ONLY: Replay & Quick Plan helpers ────────────────────────
+    // Replay the most recent persisted interview by deleting its cached
+    // goalTree and re-running HandleGenerateGoalTree against the same
+    // transcript. Lets the user iterate on prompt/schema changes without
+    // running a fresh Socratic interview each time.
+    std::string HandleDevReplayLastInterview(const std::string& requestId);
+
+    // Bypass the Socratic interview entirely. Synthesises a fake
+    // transcript from (goal, timeframe, level), persists it as a
+    // finalized InterviewResult, then calls HandleGenerateGoalTree.
+    std::string HandleDevQuickPlan(const std::string& requestId,
+                                   const std::string& goalText,
+                                   const std::string& timeframeText,
+                                   const std::string& levelText);
+
 private:
     std::string generateUUID() const;
     std::string nowISO() const;

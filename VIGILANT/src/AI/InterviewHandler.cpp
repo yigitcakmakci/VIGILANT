@@ -665,22 +665,147 @@ std::string InterviewHandler::HandleGenerateGoalTree(const std::string& requestI
         return err.dump();
     }
 
-    // Build GoalTree response — deterministic generation from interview result
+    // Build GoalTree response — AI-first (DynamicGoalTree v2), deterministic fallback (v1)
     json goalTreeJson;
+    bool generated = false;
 
-    // If a pre-generated goalTree exists in the stored result, use it
-    if (storedResult.contains("goalTree") && storedResult["goalTree"].is_object()) {
+    // If a pre-generated goalTree already exists in the stored result, reuse it
+    // ONLY when it is the new v2 schema. Older v1 trees are stale fallbacks and
+    // must be regenerated through the AI path so the user sees the new format.
+    if (storedResult.contains("goalTree") && storedResult["goalTree"].is_object()
+        && !storedResult["goalTree"].empty()
+        && storedResult["goalTree"].value("version", 1) == 2) {
         goalTreeJson = storedResult["goalTree"];
-    } else {
-        // Generate a deterministic GoalTree from the interview transcript/slots
-        goalTreeJson = buildDeterministicGoalTree(interviewSessionId, result);
+        generated = true;
+        DebugLogInterview("GoalTree: reusing pre-generated v2 tree from storedResult");
+    } else if (storedResult.contains("goalTree") && storedResult["goalTree"].is_object()
+               && storedResult["goalTree"].value("version", 1) != 2) {
+        DebugLogInterview("GoalTree: discarding stale v1 cached tree, will regenerate");
     }
 
-    // ── Schema validation (anti-hallucinated progress guard) ──────────
-    GoalTreeValidation validation = GoalTreeSchema::validate(goalTreeJson);
-    if (!validation.ok) {
-        DebugLogInterview("GoalTree validation FAILED: " + validation.error
-                          + " at " + validation.path);
+    // ── Primary path: ask Gemini to produce a DynamicGoalTree (v2) ────
+    if (!generated && m_gemini && m_gemini->isAvailable()) {
+        DebugLogInterview("GoalTree: attempting Gemini-driven DynamicGoalTree generation");
+
+        // Build interview-data context to bind every node to user's words
+        std::string interviewContext;
+        {
+            std::ostringstream ctx;
+            ctx << "# MULAKAT VERILERI (Mutlak Kisitlar)\n";
+            ctx << "Asagidaki bilgiler kullanicinin mulakat sirasinda verdigi yanitlardan cikarilmistir.\n";
+            ctx << "Bu verileri agacin HER dugumunde (title, description, acceptanceCriteria, "
+                   "actionItems, obstacle) birebir yansit.\n\n";
+            int answerIdx = 0;
+            for (const auto& msg : result.transcript) {
+                if (msg.role == "user") {
+                    ++answerIdx;
+                    ctx << "Kullanici Yaniti " << answerIdx << ": " << msg.text << "\n";
+                }
+            }
+            if (!result.extracted_slots.goal.empty())
+                ctx << "\nCikarsanan Hedef: " << result.extracted_slots.goal << "\n";
+            if (!result.extracted_slots.timeframe.empty())
+                ctx << "Cikarsanan Zaman: " << result.extracted_slots.timeframe << "\n";
+            ctx << "\n--- Mulakat Verileri Sonu ---\n\n";
+            interviewContext = ctx.str();
+        }
+
+        std::string personalizedSystemPrompt =
+            interviewContext +
+            "ONEMLI TALIMATLAR:\n"
+            "1. Yukaridaki mulakat verilerini MUTLAK KISITLAR olarak kullan.\n"
+            "2. Kullanici hangi araclari, kaynaklari veya yontemleri belirttiyse, "
+            "adimlari bunlar uzerinden kurgula.\n"
+            "3. Kullanicinin belirttigi seviyeye gore dallari basitlestir veya derinlestir.\n"
+            "4. Kullanicinin belirttigi zaman kisitina gore agacin derinligini otonom belirle:\n"
+            "   - Kisa vadeli (1-4 hafta): 2-3 seviye\n"
+            "   - Orta vadeli (1-6 ay): 3-4 seviye\n"
+            "   - Uzun vadeli (6+ ay): 4-6 seviye\n"
+            "5. description, acceptanceCriteria ve actionItems alanlarinda kullanicinin "
+            "mulakatta kullandigi SPESIFIK kelimeleri, araclari ve degerleri birebir kullan.\n"
+            "6. ASLA statik sablon ya da meta-planlama maddesi (\"plan olustur\", "
+            "\"arastirma yap\", \"ilk adimi at\") uretme. Her agac, bu mulakattin "
+            "benzersiz bir yansimasi olmali.\n\n" +
+            DynamicGoalTreePrompt::SYSTEM_PROMPT;
+
+        std::ostringstream tr;
+        for (const auto& msg : result.transcript) {
+            tr << (msg.role == "user" ? "Kullanici" : "AI") << ": " << msg.text << "\n";
+        }
+        std::string aiTs = nowISO();
+        std::string treeUserPrompt =
+            "Asagidaki gorusme gecmisine dayanarak, kullanicinin hedefi icin "
+            "recursive bir GoalNode agaci (version=2) olustur. "
+            "Agacin derinligini hedefin karmasikligina ve kullanicinin ayirabilecegi "
+            "sureye gore sen belirle.\n\n"
+            "Session ID: " + interviewSessionId + "\n"
+            "Zaman damgasi: " + aiTs + "\n\n"
+            "Gorusme gecmisi:\n" + tr.str();
+
+        std::string treeJson = m_gemini->sendPrompt(personalizedSystemPrompt, treeUserPrompt);
+
+        if (!treeJson.empty()) {
+            DebugLogInterview("GoalTree: Gemini raw response (" +
+                              std::to_string(treeJson.size()) + " bytes), preview: " +
+                              treeJson.substr(0, 300));
+            // Strip markdown fences if present
+            std::string cleaned = treeJson;
+            if (cleaned.find("```json") != std::string::npos) {
+                size_t s = cleaned.find("```json") + 7;
+                size_t e = cleaned.rfind("```");
+                if (e > s) cleaned = cleaned.substr(s, e - s);
+            } else if (cleaned.find("```") != std::string::npos) {
+                size_t s = cleaned.find("```") + 3;
+                size_t e = cleaned.rfind("```");
+                if (e > s) cleaned = cleaned.substr(s, e - s);
+            }
+            cleaned.erase(0, cleaned.find_first_not_of(" \t\n\r"));
+
+            try {
+                json dyn = json::parse(cleaned);
+                auto vr = DynamicGoalTreeSchema::validate(dyn);
+                if (vr.ok) {
+                    goalTreeJson = dyn;
+                    goalTreeJson["generation_source"] = "ai";
+                    generated = true;
+                    DebugLogInterview("GoalTree: Gemini DynamicGoalTree validated OK");
+                } else {
+                    DebugLogInterview("GoalTree: DynamicGoalTree validation FAILED: "
+                                      + vr.error + " at " + vr.path
+                                      + " | raw preview: " + cleaned.substr(0, 400));
+                }
+            } catch (const std::exception& e) {
+                DebugLogInterview("GoalTree: Gemini JSON parse error: " + std::string(e.what())
+                                  + " | raw preview: " + cleaned.substr(0, 400));
+            }
+        } else {
+            DebugLogInterview("GoalTree: Gemini returned empty response (likely token budget "
+                              "exhausted by thinking mode or API error). Check GeminiService logs.");
+        }
+    }
+
+    // ── Fallback path: deterministic v1 tree (last resort) ────────────
+    if (!generated) {
+        DebugLogInterview("GoalTree: falling back to deterministic v1 tree");
+        goalTreeJson = buildDeterministicGoalTree(interviewSessionId, result);
+        if (goalTreeJson.is_object())
+            goalTreeJson["generation_source"] = "fallback";
+    }
+
+    // ── Schema validation (version-aware; anti-hallucinated progress guard) ─
+    bool   validOk = false;
+    std::string validErr;
+    std::string validPath;
+    if (goalTreeJson.is_object() && goalTreeJson.value("version", 1) == 2) {
+        auto vr = DynamicGoalTreeSchema::validate(goalTreeJson);
+        validOk = vr.ok; validErr = vr.error; validPath = vr.path;
+    } else {
+        auto vr = GoalTreeSchema::validate(goalTreeJson);
+        validOk = vr.ok; validErr = vr.error; validPath = vr.path;
+    }
+
+    if (!validOk) {
+        DebugLogInterview("GoalTree validation FAILED: " + validErr + " at " + validPath);
 
         json errResponse;
         errResponse["type"]      = "GoalTreeValidationFailed";
@@ -688,8 +813,8 @@ std::string InterviewHandler::HandleGenerateGoalTree(const std::string& requestI
         errResponse["ts"]        = nowISO();
         errResponse["payload"]   = {
             {"interviewSessionId", interviewSessionId},
-            {"error",              validation.error},
-            {"path",               validation.path}
+            {"error",              validErr},
+            {"path",               validPath}
         };
         return errResponse.dump();
     }
@@ -1647,3 +1772,309 @@ std::string InterviewHandler::HandleReplanGoalTree(
 
                           return resp.dump();
                       }
+
+// ═══════════════════════════════════════════════════════════════════════
+// HandleLocalTaskQuery — Tunnel Vision local AI mentor
+// ═══════════════════════════════════════════════════════════════════════
+std::string InterviewHandler::HandleLocalTaskQuery(const std::string& requestId,
+                                                   const std::string& taskId,
+                                                   const std::string& taskTitle,
+                                                   const std::string& userText) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto buildResponse = [&](const std::string& aiText,
+                             const json& items,
+                             bool success,
+                             const std::string& errorCode) -> std::string {
+        json resp;
+        resp["type"]      = "LocalTaskQueryResponse";
+        resp["requestId"] = requestId;
+        resp["sessionId"] = "";
+        resp["ts"]        = nowISO();
+        resp["payload"]   = {
+            {"taskId",      taskId},
+            {"taskTitle",   taskTitle},
+            {"userText",    userText},
+            {"aiText",      aiText},
+            {"actionItems", items},
+            {"success",     success}
+        };
+        if (!errorCode.empty()) resp["payload"]["errorCode"] = errorCode;
+        return resp.dump();
+    };
+
+    if (taskId.empty() || taskTitle.empty()) {
+        DebugLogInterview("LocalTaskQuery: missing task scope");
+        return buildResponse("", json::array(), false, "missing_task_scope");
+    }
+
+    if (!m_gemini || !m_gemini->isAvailable()) {
+        DebugLogInterview("LocalTaskQuery: Gemini unavailable");
+        return buildResponse("AI servisi su anda kullanilamiyor.",
+                             json::array(), false, "ai_unavailable");
+    }
+
+    // ── System prompt: strict, task-scoped, atomic decomposition ──────
+    const std::string systemPrompt =
+        "Sen 'Lokal AI Mentor'sun. Tum cevaplarin kullanicinin sadece su anki "
+        "gorevine odakli olmali; gorevin disina ASLA cikma, baska konulara, "
+        "diger maddelere veya genel onerilere kayma.\n\n"
+        "Kullanicinin odaklandigi gorev:\n"
+        "Baslik: \"" + taskTitle + "\"\n"
+        "Gorev kimligi: " + taskId + "\n\n"
+        "Gorevin: Kullanicinin bu spesifik adimi asabilmesi icin onundeki "
+        "engelleri (unknown unknowns) tespit et ve bu maddeyi asabilmesi "
+        "icin ona TAM 3 yeni ve cok daha kucuk (atomik) aksiyon maddesi uret. "
+        "Her bir aksiyon maddesi:\n"
+        "  - 5-15 dakikada tamamlanabilecek kadar kucuk olmali,\n"
+        "  - Tek bir somut eylemi (verb + obje) ifade etmeli,\n"
+        "  - Sadece su anki goreve hizmet etmeli (asla daha buyuk bir kapsam acma),\n"
+        "  - Turkce yazilmali.\n\n"
+        "CIKTI SOZLESMESI (zorunlu):\n"
+        "Sadece TEK bir gecerli JSON nesnesi don. Aciklama, markdown veya "
+        "kod blogu kullanma. Format:\n"
+        "{\n"
+        "  \"explanation\": \"<kullaniciya kisa, samimi bir aciklama (1-3 cumle)>\",\n"
+        "  \"actionItems\": [\n"
+        "    { \"text\": \"<atomik adim 1>\" },\n"
+        "    { \"text\": \"<atomik adim 2>\" },\n"
+        "    { \"text\": \"<atomik adim 3>\" }\n"
+        "  ]\n"
+        "}";
+
+    const std::string userPrompt =
+        "Kullanicinin sorusu / durumu:\n\"" + userText + "\"\n\n"
+        "Su anda \"" + taskTitle + "\" gorevine odaklanmis durumda. "
+        "Bu adimi asabilmesi icin 3 atomik aksiyon maddesi uret.";
+
+    std::string raw = m_gemini->sendPrompt(systemPrompt, userPrompt);
+    if (raw.empty()) {
+        DebugLogInterview("LocalTaskQuery: Gemini returned empty response");
+        return buildResponse("AI yanit veremedi, lutfen tekrar dene.",
+                             json::array(), false, "ai_empty_response");
+    }
+
+    // ── Strip markdown fences if present ──────────────────────────────
+    std::string cleaned = raw;
+    {
+        auto fence = cleaned.find("```json");
+        if (fence != std::string::npos) {
+            size_t start = fence + 7;
+            size_t end = cleaned.rfind("```");
+            if (end > start) cleaned = cleaned.substr(start, end - start);
+        } else if (cleaned.find("```") != std::string::npos) {
+            size_t start = cleaned.find("```") + 3;
+            size_t end = cleaned.rfind("```");
+            if (end > start) cleaned = cleaned.substr(start, end - start);
+        }
+        // Trim leading whitespace
+        size_t firstNonWs = cleaned.find_first_not_of(" \t\r\n");
+        if (firstNonWs != std::string::npos) cleaned.erase(0, firstNonWs);
+    }
+
+    json parsed;
+    try {
+        parsed = json::parse(cleaned);
+    } catch (const std::exception& e) {
+        DebugLogInterview(std::string("LocalTaskQuery: JSON parse failed: ") + e.what());
+        return buildResponse(raw, json::array(), false, "ai_parse_failed");
+    }
+
+    std::string explanation = parsed.value("explanation", std::string{});
+    json items = json::array();
+    if (parsed.contains("actionItems") && parsed["actionItems"].is_array()) {
+        int idx = 0;
+        for (const auto& it : parsed["actionItems"]) {
+            if (idx >= 3) break;
+            std::string text;
+            if (it.is_string())          text = it.get<std::string>();
+            else if (it.is_object())     text = it.value("text", std::string{});
+            if (text.empty()) continue;
+
+            json item;
+            item["id"]          = "ai-" + generateUUID();
+            item["text"]        = text;
+            item["isCompleted"] = false;
+            item["source"]      = "local-ai-mentor";
+            items.push_back(item);
+            ++idx;
+        }
+    }
+
+    if (items.empty()) {
+        DebugLogInterview("LocalTaskQuery: no action items extracted");
+        return buildResponse(explanation.empty() ? raw : explanation,
+                             json::array(), false, "ai_no_items");
+    }
+
+    if (explanation.empty()) {
+        explanation = "Bu adimi parcalara ayirmak icin 3 atomik adim hazirladim.";
+    }
+
+    DebugLogInterview("LocalTaskQuery: extracted " + std::to_string(items.size()) +
+                      " atomic items for task '" + taskId + "'");
+    return buildResponse(explanation, items, true, "");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// DEV ONLY — HandleDevReplayLastInterview
+// Loads the most recent persisted interview (from Vault), wipes its
+// cached goalTree so the AI path is forced, and re-runs goal generation.
+// Result is the standard GoalTreeGenerated envelope (or an error one).
+// ═══════════════════════════════════════════════════════════════════════
+std::string InterviewHandler::HandleDevReplayLastInterview(const std::string& requestId) {
+    DebugLogInterview("DevReplay: requested");
+
+    if (!m_vault) {
+        json err;
+        err["type"]      = "Error";
+        err["requestId"] = requestId;
+        err["payload"]   = {
+            {"code",    "NO_VAULT"},
+            {"message", "Vault is not available"}
+        };
+        return err.dump();
+    }
+
+    // Find the most recent persisted session
+    json recent = m_vault->getRecentInterviewSessions(1);
+    std::string sessionId;
+    if (recent.is_array() && !recent.empty()) {
+        const auto& first = recent[0];
+        if (first.is_object()) {
+            sessionId = first.value("session_id", first.value("sessionId", std::string{}));
+        } else if (first.is_string()) {
+            sessionId = first.get<std::string>();
+        }
+    }
+
+    if (sessionId.empty()) {
+        json err;
+        err["type"]      = "Error";
+        err["requestId"] = requestId;
+        err["payload"]   = {
+            {"code",    "NO_RECENT_INTERVIEW"},
+            {"message", "No recent interview found in Vault"}
+        };
+        return err.dump();
+    }
+
+    DebugLogInterview("DevReplay: found recent session=" + sessionId
+                      + ", clearing cached goalTree and regenerating");
+
+    // Wipe cached goalTree so HandleGenerateGoalTree is forced through AI path
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        json stored = m_vault->getInterviewResult(sessionId);
+        if (stored.is_object() && stored.contains("goalTree")) {
+            stored.erase("goalTree");
+            m_vault->saveInterviewResult(
+                sessionId,
+                stored.dump(),
+                stored.value("ended_by", "complete"),
+                stored.value("question_count", 0),
+                stored.value("max_questions", 3));
+        }
+        // Also clear in-memory cache so HandleGenerateGoalTree can't reuse it
+        m_lastStoredResult = json();
+    }
+
+    // Delegate to the standard pipeline — it will lock the mutex itself
+    return HandleGenerateGoalTree(requestId, sessionId);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// DEV ONLY — HandleDevQuickPlan
+// Bypasses the Socratic interview entirely: builds a synthetic transcript
+// from (goal, timeframe, level), persists it as a finalized
+// InterviewResult, then runs HandleGenerateGoalTree on it.
+// ═══════════════════════════════════════════════════════════════════════
+std::string InterviewHandler::HandleDevQuickPlan(const std::string& requestId,
+                                                  const std::string& goalText,
+                                                  const std::string& timeframeText,
+                                                  const std::string& levelText) {
+    DebugLogInterview("DevQuickPlan: requested goal='" + goalText
+                      + "' timeframe='" + timeframeText
+                      + "' level='" + levelText + "'");
+
+    if (goalText.empty()) {
+        json err;
+        err["type"]      = "Error";
+        err["requestId"] = requestId;
+        err["payload"]   = {
+            {"code",    "MISSING_GOAL"},
+            {"message", "Goal text is required for Quick Plan"}
+        };
+        return err.dump();
+    }
+
+    if (!m_vault) {
+        json err;
+        err["type"]      = "Error";
+        err["requestId"] = requestId;
+        err["payload"]   = {
+            {"code",    "NO_VAULT"},
+            {"message", "Vault is not available"}
+        };
+        return err.dump();
+    }
+
+    // Build synthetic transcript that looks like a normal Socratic interview
+    std::string ts        = nowISO();
+    std::string sessionId = "dev-qp-" + generateUUID();
+
+    auto mkMsg = [&](const std::string& role, const std::string& text) {
+        json m;
+        m["message_id"] = generateUUID();
+        m["role"]       = role;
+        m["text"]       = text;
+        m["iso_ts"]     = ts;
+        return m;
+    };
+
+    json transcript = json::array();
+    transcript.push_back(mkMsg("ai",   "Hedefin nedir?"));
+    transcript.push_back(mkMsg("user", goalText));
+    transcript.push_back(mkMsg("ai",   "Hangi zaman dilimi icinde tamamlamak istiyorsun?"));
+    transcript.push_back(mkMsg("user", timeframeText.empty() ? "Belirtilmedi" : timeframeText));
+    transcript.push_back(mkMsg("ai",   "Su anki seviyen / durumun nedir?"));
+    transcript.push_back(mkMsg("user", levelText.empty() ? "Baslangic" : levelText));
+
+    json slots;
+    slots["goal"]          = goalText;
+    slots["timeframe"]     = timeframeText;
+    slots["weekly_hours"]  = 0;
+    slots["current_level"] = levelText;
+    slots["constraints"]   = json::array();
+
+    json doc;
+    doc["session_id"]      = sessionId;
+    doc["finalized"]       = true;
+    doc["ended_by"]        = "dev_quick_plan";
+    doc["question_count"]  = 3;
+    doc["max_questions"]   = 3;
+    doc["created_at"]      = ts;
+    doc["finalized_at"]    = ts;
+    doc["transcript"]      = transcript;
+    doc["extracted_slots"] = slots;
+    doc["extractedSlots"]  = slots; // legacy alias used by some readers
+
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        bool ok = m_vault->saveInterviewResult(
+            sessionId, doc.dump(), "dev_quick_plan", 3, 3);
+        if (!ok) {
+            DebugLogInterview("DevQuickPlan: WARNING saveInterviewResult returned false");
+        }
+        if (doc.contains("transcript") && doc["transcript"].is_array()) {
+            m_vault->saveInterviewMessages(sessionId, doc["transcript"]);
+        }
+        // Drop in-memory cache so the regenerator doesn't reuse a previous tree
+        m_lastStoredResult = json();
+    }
+
+    DebugLogInterview("DevQuickPlan: synthesised session=" + sessionId
+                      + ", delegating to HandleGenerateGoalTree");
+
+    return HandleGenerateGoalTree(requestId, sessionId);
+}

@@ -1,4 +1,6 @@
 ﻿#include "../../include/Core/WindowTracker.hpp"
+#include "../../include/Core/FocusGuard.hpp"
+#include "../../include/Data/DatabaseManager.hpp"
 #include "../../include/UI/BrowserBridge.hpp"
 #include "../../include/Utils/EventQueue.hpp"
 #include "../../include/Utils/EventBridge.hpp"
@@ -76,6 +78,7 @@ static std::string s_lastTitle;
 static BrowserBridge g_Bridge;
 extern EventQueue    g_EventQueue;
 extern EventBridge*  g_EventBridge;
+extern DatabaseManager g_Vault;
 
 // Yardimci: wchar_t* -> UTF-8 std::string (stack buffer optimization)
 static std::string WideToUtf8(const wchar_t* wstr, int wlen = -1) {
@@ -127,9 +130,9 @@ static void ResolverThread() {
             // --- Window title (heavy: GetWindowTextW) ---
             wchar_t wTitle[512];
             int titleLen = GetWindowTextW(raw.hwnd, wTitle, _countof(wTitle));
-            if (titleLen == 0) continue;
-            std::string currentTitle = WideToUtf8(wTitle, titleLen);
-            if (currentTitle.empty()) continue;
+            std::string currentTitle = (titleLen > 0)
+                ? WideToUtf8(wTitle, titleLen)
+                : std::string();
 
             // --- PID + process name (cached) ---
             DWORD processId = 0;
@@ -137,6 +140,12 @@ static void ResolverThread() {
 
             auto cached = s_processCache.lookup(processId);
             if (cached.processName == "Unknown") continue;
+
+            // Title henuz hazir degilse process adini fallback olarak kullan,
+            // boylece oyunlar/splash pencereler kacirilmiyor.
+            if (currentTitle.empty()) {
+                currentTitle = cached.processName;
+            }
 
             // --- Dedup (same process+title → skip) ---
             if (cached.processName == s_lastProcess && currentTitle == s_lastTitle) {
@@ -175,6 +184,14 @@ static void ResolverThread() {
             // NOTE: Push BEFORE move so EventBridge gets valid data
             if (g_EventBridge) g_EventBridge->PushEvent(data);
 
+            // Focus protection (no-op unless policy != None and category is "Game")
+            try {
+                auto cat = g_Vault.getScoreForActivity(data.processName, data.title).second;
+                g_FocusGuard.OnActiveAppChanged(data.processName, data.title, cat);
+            } catch (...) {
+                // never let focus-guard errors break the resolver
+            }
+
             // DB kuyrugu (BackgroundWorker)
             g_EventQueue.push(std::move(data));
             PERF_COUNT(events_queued);
@@ -188,6 +205,16 @@ std::string WindowTracker::GetProcessName(HWND hwnd) {
     DWORD processId;
     GetWindowThreadProcessId(hwnd, &processId);
     return s_processCache.lookup(processId).processName;
+}
+
+int WindowTracker::GetIdleSeconds() {
+    LASTINPUTINFO lii;
+    lii.cbSize = sizeof(lii);
+    if (!GetLastInputInfo(&lii)) return 0;
+    DWORD now = GetTickCount();
+    if (now < lii.dwTime) return 0;
+    DWORD diffMs = now - lii.dwTime;
+    return (int)(diffMs / 1000);
 }
 
 void WindowTracker::StartTracking() {

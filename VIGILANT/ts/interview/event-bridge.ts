@@ -45,6 +45,9 @@ export { mergeGoalTrees, diffGoalTrees } from './goal-tree-replanner';
 
 export {
     renderGoalTree,
+    renderGoalForest,
+    publishUpdateGoalOrder,
+    openTunnelVision,
     computeNodeProgress,
     collectLeaves,
     findNodeById,
@@ -168,6 +171,9 @@ export type EventType =
     | 'RematchRequested'
     | 'GoalsChatStartRequested'
     | 'GoalsChatMessageSubmitted'
+    | 'UpdateGoalOrder'
+    | 'RemoveGoalRequested'
+    | 'LocalTaskQuery'
     // C++ → UI
     | 'InterviewStarted'
     | 'GoalsChatResponse'
@@ -193,6 +199,10 @@ export type EventType =
     | 'TickHistoryProduced'
     | 'CandidatesInvalidated'
     | 'GoalTreeVersionUpdated'
+    | 'GoalOrderUpdated'
+    | 'GoalRemoved'
+    | 'GoalTreeSummaryUpdated'
+    | 'LocalTaskQueryResponse'
     | 'Error';
 
 export interface BridgeEnvelope {
@@ -603,4 +613,54 @@ export function publishRematchRequested(
         ts: new Date().toISOString(),
         payload: { interviewSessionId, journalText, goalTreeVersionId },
     });
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Tunnel Vision — Local AI Mentor (single-task focused query)
+// ═══════════════════════════════════════════════════════════════════════
+
+/** UI → C++: ask the local AI mentor a question scoped to a single task. */
+export interface LocalTaskQueryPayload {
+    taskId: string;
+    taskTitle: string;
+    text: string;
+}
+
+/** C++ → UI: AI mentor reply with 3 atomic action items. */
+export interface LocalTaskQueryResponsePayload {
+    taskId: string;
+    taskTitle: string;
+    userText: string;
+    aiText: string;
+    actionItems: Array<{
+        id: string;
+        text: string;
+        isCompleted: boolean;
+        source?: string;
+    }>;
+    success: boolean;
+    errorCode?: string;
+}
+
+/**
+ * Publish a Tunnel Vision local-task query to the C++ backend.
+ * The backend will invoke Gemini with a strict task-scoped prompt and
+ * dispatch a `LocalTaskQueryResponse` envelope back. The matching
+ * GoalNode's actionItems will also be mutated and re-broadcast via
+ * `GoalTreeSummaryUpdated`.
+ */
+export function publishLocalTaskQuery(
+    taskId: string,
+    taskTitle: string,
+    text: string,
+): string {
+    const requestId = nextRequestId();
+    publish({
+        type: 'LocalTaskQuery',
+        sessionId: taskId,
+        requestId,
+        ts: new Date().toISOString(),
+        payload: { taskId, taskTitle, text },
+    });
+    return requestId;
 }

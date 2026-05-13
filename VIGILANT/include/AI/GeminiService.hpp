@@ -54,6 +54,22 @@ public:
     std::string sendPrompt(const std::string& systemPrompt,
                            const std::string& userPrompt);
 
+    // ── Batch C: Weekly Review + Proactive Coach ──
+    // weeklyData: getWeeklyReviewData çıktısı (totalSec, productiveSec,
+    // productivityPct, topApps[], weekStart). AI yoksa deterministik
+    // bir özet metin döner; boş dönmez.
+    std::string generateWeeklyReviewNarrative(const nlohmann::json& weeklyData);
+
+    // ctx: { process, windowTitle, category, score, idleSec, topGoal? }
+    // Tek cümlelik, kullanıcıyı yargılamayan, yön gösteren öneri döner.
+    // AI yoksa deterministik bir mesaj döner.
+    std::string generateProactiveCoachLine(const nlohmann::json& ctx);
+
+    // ── Batch D: AI App↔Goal eşleştirme önerisi ──
+    // ctx: { apps:[{process, durationMin}], goals:[title,...] }
+    // Sonuç: [{ process, goalTitle }] dizisi. AI yoksa basit heuristik döner.
+    nlohmann::json suggestAppGoalLinks(const nlohmann::json& ctx);
+
     // ── Token Odometer ─────────────────────────────────────────────────
     static constexpr int64_t kDailyTokenLimit = 1'000'000;
 

@@ -16,6 +16,111 @@
 import type { GoalNode, ActionItem } from './goal-tree-types';
 
 // ═══════════════════════════════════════════════════════════════════════
+// Tunnel Vision — single-task focus drawer integration
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Open the Tunnel Vision drawer (defined in dashboard_pro.html) for the
+ * given task. Falls back to a custom event so any host page can listen.
+ */
+export function openTunnelVision(taskId: string, taskTitle: string): void {
+    const w = window as any;
+    if (w?.TunnelVision?.open) {
+        w.TunnelVision.open(taskId, taskTitle);
+        return;
+    }
+    try {
+        document.dispatchEvent(new CustomEvent('tunnelvision:open-request', {
+            detail: { taskId, taskTitle },
+        }));
+    } catch {
+        console.log('[goal-tree-recursive-ui] TunnelVision unavailable:', { taskId, taskTitle });
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// Drag & Drop — publish reorder events to C++ backend
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Publish an UpdateGoalOrder message to C++ via the WebView2 bridge.
+ * Sent when the user drops a Major (root) goal card at a new position.
+ */
+export function publishUpdateGoalOrder(oldIndex: number, newIndex: number): void {
+    if (oldIndex === newIndex || oldIndex < 0 || newIndex < 0) return;
+    const envelope = {
+        type: 'UpdateGoalOrder',
+        sessionId: '',
+        requestId: 'rgo-' + Date.now(),
+        ts: new Date().toISOString(),
+        payload: { oldIndex, newIndex },
+    };
+    const w = window as any;
+    if (w?.chrome?.webview?.postMessage) {
+        w.chrome.webview.postMessage(envelope);
+    } else {
+        console.log('[goal-tree-recursive-ui] UpdateGoalOrder (no WebView2):', envelope);
+    }
+}
+
+// Tracks the card being dragged within the current container.
+let _dragSourceIndex: number = -1;
+
+function attachRootDragHandlers(
+    card: HTMLElement,
+    container: HTMLElement,
+    index: number,
+): void {
+    card.draggable = true;
+    card.dataset.goalIndex = String(index);
+    card.classList.add('goal-major-draggable');
+
+    card.addEventListener('dragstart', (e: DragEvent) => {
+        _dragSourceIndex = index;
+        card.classList.add('goal-major-dragging');
+        if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            try { e.dataTransfer.setData('text/plain', String(index)); } catch {}
+        }
+    });
+
+    card.addEventListener('dragend', () => {
+        card.classList.remove('goal-major-dragging');
+        container.querySelectorAll('.goal-major-drop-target')
+            .forEach((el) => el.classList.remove('goal-major-drop-target'));
+        _dragSourceIndex = -1;
+    });
+
+    card.addEventListener('dragover', (e: DragEvent) => {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        card.classList.add('goal-major-drop-target');
+    });
+
+    card.addEventListener('dragleave', () => {
+        card.classList.remove('goal-major-drop-target');
+    });
+
+    card.addEventListener('drop', (e: DragEvent) => {
+        e.preventDefault();
+        card.classList.remove('goal-major-drop-target');
+
+        let oldIndex = _dragSourceIndex;
+        if (oldIndex < 0 && e.dataTransfer) {
+            const raw = e.dataTransfer.getData('text/plain');
+            const parsed = parseInt(raw, 10);
+            if (!Number.isNaN(parsed)) oldIndex = parsed;
+        }
+        const newIndex = index;
+        if (oldIndex < 0 || oldIndex === newIndex) return;
+
+        publishUpdateGoalOrder(oldIndex, newIndex);
+    });
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
 // Progress bar color based on percentage
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -58,7 +163,12 @@ function esc(text: string): string {
 // renderGoalNode — recursive inner renderer
 // ═══════════════════════════════════════════════════════════════════════
 
-function renderGoalNode(node: GoalNode, parent: HTMLElement, depth: number): void {
+function renderGoalNode(
+    node: GoalNode,
+    parent: HTMLElement,
+    depth: number,
+    rootIndex?: number,
+): void {
     const wrapper = document.createElement('div');
     wrapper.className = depth > 0
         ? `pl-6 ml-2 border-l-2 ${depthBorderColor(depth)} mt-2`
@@ -74,6 +184,11 @@ function renderGoalNode(node: GoalNode, parent: HTMLElement, depth: number): voi
         node.isLeaf ? 'cursor-pointer' : '',
     ].join(' ');
     card.dataset.nodeId = node.id;
+
+    // ── Drag & Drop on Major (depth 0) cards ──────────────────────────
+    if (depth === 0 && typeof rootIndex === 'number' && rootIndex >= 0) {
+        attachRootDragHandlers(card, parent, rootIndex);
+    }
 
     // ── Header row: icon + title + progress badge ─────────────────────
     const header = document.createElement('div');
@@ -106,6 +221,14 @@ function renderGoalNode(node: GoalNode, parent: HTMLElement, depth: number): voi
     const titleEl = document.createElement('span');
     titleEl.className = 'font-semibold text-white/90 text-sm flex-1 leading-tight';
     titleEl.textContent = node.title;
+    if (node.isLeaf) {
+        titleEl.classList.add('cursor-pointer');
+        titleEl.title = 'Tünel görüşünü aç';
+        titleEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openTunnelVision(node.id, node.title);
+        });
+    }
     header.appendChild(titleEl);
 
     // Progress badge
@@ -181,9 +304,17 @@ function renderGoalNode(node: GoalNode, parent: HTMLElement, depth: number): voi
             li.appendChild(cb);
 
             const label = document.createElement('span');
-            label.className = 'text-[11px] text-white/50 leading-tight';
+            label.className = 'text-[11px] text-white/50 leading-tight cursor-pointer';
+            label.title = 'Tünel görüşünü aç';
             label.textContent = item.text;
             if (item.isCompleted) label.className += ' line-through opacity-50';
+            label.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const actionId = (item as any).id != null
+                    ? String((item as any).id)
+                    : `${node.id}:action:${item.text}`;
+                openTunnelVision(actionId, item.text);
+            });
             li.appendChild(label);
 
             aiList.appendChild(li);
@@ -336,4 +467,21 @@ export function renderGoalTree(node: GoalNode, container: HTMLElement): void {
 
     // Render tree
     renderGoalNode(node, container, 0);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// renderGoalForest — render multiple Major roots with drag-and-drop
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Render an ordered list of root GoalNodes (Major goals).
+ * Each root card is draggable; dropping it on another card publishes
+ * an UpdateGoalOrder envelope to the C++ backend.
+ */
+export function renderGoalForest(roots: GoalNode[], container: HTMLElement): void {
+    container.innerHTML = '';
+    for (let i = 0; i < roots.length; i++) {
+        computeNodeProgress(roots[i]);
+        renderGoalNode(roots[i], container, 0, i);
+    }
 }

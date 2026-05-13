@@ -7,6 +7,7 @@
 #include "resource.h"
 #include "Data/DatabaseManager.hpp"
 #include "Core/WindowTracker.hpp"
+#include "Core/FocusGuard.hpp"
 #include "Utils/EventQueue.hpp"
 #include "Utils/EventBridge.hpp"
 #include "UI/WebViewManager.hpp"
@@ -40,6 +41,9 @@ int main() {
 
     g_Vault.init();
     OutputDebugStringW(L"Database initialized\n");
+
+    g_FocusGuard.Init(g_Vault);
+    OutputDebugStringW(L"FocusGuard initialized\n");
 
     std::thread worker(BackgroundWorker);
     std::thread hotkey(HotkeyWorker);
@@ -103,7 +107,11 @@ int main() {
             OutputDebugStringW(L"WebView2 initialized successfully in STA thread\n");
 
             // WebView2 hazir, bildirim artik BackgroundWorker uzerinden yapiliyor
-            Sleep(1000); // WebView2'nin tamamen yüklenmesini bekle
+            // NOT: Ideal cozum NavigationCompleted event'ini beklemek; mevcut akisla
+            //      uyumlulugu korumak icin kisa bir bekleme yapiyoruz. Bu sure
+            //      sadece WebView2 ic bilesenlerinin yerlesmesi icindir; ana
+            //      mesaj dongusunu bloke etmez (ayri thread).
+            Sleep(1000); // TODO: replace with NavigationCompleted callback
             OutputDebugStringW(L"WebView2 ready, notifications via BackgroundWorker\n");
 
             // EventBridge: WebView event kuyrugundan okuyan kopruyu baslat
@@ -212,6 +220,8 @@ int main() {
 
     if (g_WebViewManager) {
         delete g_WebViewManager;
+        g_WebViewManager = nullptr;
+        OutputDebugStringW(L"WebViewManager cleaned up\n");
     }
 
     // AI siniflandirma gorevini durdur
@@ -219,6 +229,8 @@ int main() {
     OutputDebugStringW(L"AI Classifier task stopped\n");
 
     WindowTracker::StopTracking();
+
+    g_FocusGuard.Shutdown();
 
     // Stop event queue so BackgroundWorker can exit
     g_EventQueue.stop();

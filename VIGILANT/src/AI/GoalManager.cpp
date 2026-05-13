@@ -52,6 +52,30 @@ bool GoalManager::removeGoal(const std::string& rootNodeId) {
 	return true;
 }
 
+bool GoalManager::reorderGoal(size_t oldIndex, size_t newIndex) {
+	{
+		std::lock_guard<std::mutex> lock(m_mutex);
+		const size_t n = m_goals.size();
+		if (n < 2 || oldIndex >= n || newIndex >= n || oldIndex == newIndex) {
+			DebugLog("reorderGoal: invalid indices old=" + std::to_string(oldIndex) +
+				" new=" + std::to_string(newIndex) + " size=" + std::to_string(n));
+			return false;
+		}
+
+		auto first = m_goals.begin();
+		if (oldIndex < newIndex) {
+			// rotate range [oldIndex, newIndex+1) so element at oldIndex moves to newIndex
+			std::rotate(first + oldIndex, first + oldIndex + 1, first + newIndex + 1);
+		} else {
+			// rotate range [newIndex, oldIndex+1) so element at oldIndex moves to newIndex
+			std::rotate(first + newIndex, first + oldIndex, first + oldIndex + 1);
+		}
+		DebugLog("Goal reordered: " + std::to_string(oldIndex) + " -> " + std::to_string(newIndex));
+	}
+	broadcastSummary();
+	return true;
+}
+
 nlohmann::json GoalManager::getAllGoals() const {
 	std::lock_guard<std::mutex> lock(m_mutex);
 	nlohmann::json arr = nlohmann::json::array();
@@ -95,6 +119,78 @@ size_t GoalManager::count() const {
 }
 
 // ── Active goal tracking ───────────────────────────────────────────────
+
+namespace {
+// Recursively search the subtree rooted at `node` for a GoalNode whose
+// `id` equals `nodeId`. On match, append `newItems` (already validated
+// JSON array) to the node's `actionItems` array. Returns true if a match
+// was found and the items were appended.
+bool appendActionItemsRecursive(nlohmann::json& node,
+                                const std::string& nodeId,
+                                const nlohmann::json& newItems,
+                                std::string* outNodeTitle) {
+    if (!node.is_object()) return false;
+
+    if (node.contains("id") && node["id"].is_string() &&
+        node["id"].get<std::string>() == nodeId) {
+        if (!node.contains("actionItems") || !node["actionItems"].is_array()) {
+            node["actionItems"] = nlohmann::json::array();
+        }
+        for (const auto& it : newItems) {
+            node["actionItems"].push_back(it);
+        }
+        if (outNodeTitle && node.contains("title") && node["title"].is_string()) {
+            *outNodeTitle = node["title"].get<std::string>();
+        }
+        return true;
+    }
+
+    if (node.contains("children") && node["children"].is_array()) {
+        for (auto& child : node["children"]) {
+            if (appendActionItemsRecursive(child, nodeId, newItems, outNodeTitle))
+                return true;
+        }
+    }
+    return false;
+}
+} // anonymous namespace
+
+bool GoalManager::appendActionItemsByNodeId(const std::string& nodeId,
+                                            const nlohmann::json& newItems,
+                                            std::string* outNodeTitle) {
+    if (nodeId.empty() || !newItems.is_array() || newItems.empty()) {
+        DebugLog("appendActionItemsByNodeId: invalid args (id='" + nodeId +
+            "', items=" + (newItems.is_array() ? std::to_string(newItems.size()) : std::string("not-array")) + ")");
+        return false;
+    }
+
+    bool matched = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& tree : m_goals) {
+            // Tree is either { root: {...} } envelope or a raw GoalNode.
+            if (tree.contains("root") && tree["root"].is_object()) {
+                if (appendActionItemsRecursive(tree["root"], nodeId, newItems, outNodeTitle)) {
+                    matched = true;
+                    break;
+                }
+            } else {
+                if (appendActionItemsRecursive(tree, nodeId, newItems, outNodeTitle)) {
+                    matched = true;
+                    break;
+                }
+            }
+        }
+        if (matched) {
+            DebugLog("appendActionItemsByNodeId: appended " +
+                std::to_string(newItems.size()) + " items to node '" + nodeId + "'");
+        } else {
+            DebugLog("appendActionItemsByNodeId: node not found: " + nodeId);
+        }
+    }
+    if (matched) broadcastSummary();
+    return matched;
+}
 
 void GoalManager::setActiveGoal(const std::string& goalId) {
 	{

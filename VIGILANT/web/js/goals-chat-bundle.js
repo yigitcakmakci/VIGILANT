@@ -104,6 +104,7 @@
 		var stLayout = document.getElementById('stLayout');
 		if (stLayout) stLayout.style.display = 'none';
 
+		this._armWatchdog();
 		this._post({
 			type: 'GoalsChatStartRequested',
 			sessionId: '',
@@ -136,21 +137,69 @@
 		this._setInputEnabled(false);
 		this._showTyping();
 
+		var rid = this._rid();
+		this._lastRequestId = rid;
+		this._armWatchdog();
+
 		this._post({
 			type: 'GoalsChatMessageSubmitted',
 			sessionId: this._sessionId,
-			requestId: this._rid(),
+			requestId: rid,
 			ts: new Date().toISOString(),
 			payload: { sessionId: this._sessionId, text: text }
 		});
 	};
 
+	// ── Watchdog: clear stuck "thinking…" state if backend never responds ──
+	GoalsChatController.prototype._armWatchdog = function () {
+		var self = this;
+		this._clearWatchdog();
+		// Backend may chain two Gemini calls (Socratic + tree gen) at 30s each
+		// plus network jitter. Give it a generous ceiling before unsticking UI.
+		this._watchdogId = setTimeout(function () {
+			if (!self._busy) return;
+			self._hideTyping();
+			self._busy = false;
+			self._setInputEnabled(true);
+			self._appendBubble(
+				'AI yanıtı zaman aşımına uğradı. Lütfen tekrar dene veya yeni bir oturum başlat.',
+				'system'
+			);
+		}, 90000);
+	};
+	GoalsChatController.prototype._clearWatchdog = function () {
+		if (this._watchdogId) {
+			clearTimeout(this._watchdogId);
+			this._watchdogId = null;
+		}
+	};
+
 	// ── Handle backend message ─────────────────────────────────────────
 	GoalsChatController.prototype._onBackend = function (data) {
-		if (!data || data.type !== 'GoalsChatResponse') return;
+		if (!data) return;
+
+		// Surface backend errors so the UI doesn't hang on the typing spinner.
+		if (data.type === 'Error') {
+			var p = data.payload || {};
+			var code = p.code || 'UNKNOWN';
+			// Ignore duplicate-request races; another in-flight call will resolve.
+			if (code === 'DUPLICATE_REQUEST') return;
+			this._clearWatchdog();
+			this._hideTyping();
+			this._busy = false;
+			this._setInputEnabled(true);
+			this._appendBubble(
+				'Hata: ' + (p.message || code),
+				'system'
+			);
+			return;
+		}
+
+		if (data.type !== 'GoalsChatResponse') return;
 		var p = data.payload || {};
 		var rt = p.responseType;
 
+		this._clearWatchdog();
 		this._hideTyping();
 
 		// Capture sessionId on chatStarted

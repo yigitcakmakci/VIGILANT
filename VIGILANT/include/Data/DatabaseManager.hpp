@@ -51,6 +51,8 @@ public:
     bool init();
     int logActivity(const EventData& data);
     void updateDuration(int id, int seconds);
+    // Aktif (idle olmayan) saniye yazimi (Activities.ACTIVE_SEC kolonu)
+    void updateActiveDuration(int id, int activeSeconds);
 
     // Batch transaction control — wrap multiple logActivity/updateDuration in one txn
     void beginTransaction();
@@ -125,6 +127,67 @@ public:
                                                const std::string& microTaskId);
     // Returns all ticks sourced from a specific journal entry
     std::vector<TickRecord> getAutoTicksByJournal(const std::string& journalEntryId);
+
+    // ── AppSettings (key/value) ──
+    // Generic persisted user preferences. Returns defaultValue if key
+    // is missing or DB read fails.
+    std::string getSetting(const std::string& key,
+                           const std::string& defaultValue = "");
+    bool setSetting(const std::string& key, const std::string& value);
+
+    // ── Batch B/C: Goal links, Digital Diet, Intent log, Weekly review ──
+    // App ↔ Goal bağlama (manuel)
+    bool linkAppToGoal(const std::string& process,
+                       const std::string& titlePattern,
+                       const std::string& goalId,
+                       const std::string& goalTitle);
+    bool unlinkAppFromGoal(const std::string& process,
+                           const std::string& titlePattern,
+                           const std::string& goalId);
+    nlohmann::json getAppGoalLinks();
+
+    // Digital Diet etiketi: 'fuel'|'neutral'|'junk'|'sugar'
+    bool setDigitalDietTag(const std::string& process,
+                           const std::string& tag,
+                           const std::string& note = "");
+    nlohmann::json getDigitalDietTags();
+
+    // Intent log (soft-block prompt cevapları)
+    bool logIntent(const std::string& process,
+                   const std::string& windowTitle,
+                   const std::string& intent,
+                   const std::string& outcome,
+                   int durationHint);
+
+    // Pattern Mirror: son 28 günden gün/saat bazlı kalıplar
+    nlohmann::json getPatternMirror(int days = 28);
+
+    // Weekly Review verisi (Pazartesi başlangıçlı haftalık toplam + top apps)
+    nlohmann::json getWeeklyReviewData(const std::string& weekStart = "");
+    bool saveWeeklyReview(const std::string& weekStart,
+                          int totalSec, int productiveSec,
+                          const std::string& topAppsJson,
+                          const std::string& narrative);
+
+    // Hedef için kalan süre tahmini (toplam üretken sn / hedef gün hedefi)
+    nlohmann::json getTimeToGoalEstimate(const std::string& goalId, int targetMinutes = 600);
+
+    // Bedtime ayarı (AppSettings üstünde basit wrapper)
+    nlohmann::json getBedtime();
+    bool setBedtime(int hour, int minute, int warnMinutes);
+
+    // Tetikleyici geçişler: ardışık (A → B) süreç geçişlerini sayar
+    nlohmann::json getTriggerTransitions(int days = 14, int limit = 12);
+
+    // Aktivite ısı haritası: gün × saat aktif/toplam saniye
+    nlohmann::json getActivityHeatmap(int days = 30);
+
+    // Günlük zaman bütçeleri (AppSettings üstünde "budget:<process>" anahtarıyla)
+    bool setDailyBudget(const std::string& process, int seconds);
+    int  getDailyBudget(const std::string& process);
+    nlohmann::json getDailyBudgets();
+    int  getTodayUsageSeconds(const std::string& process);
+    nlohmann::json getDailyBudgetStatus();
 
     // Veritabanı Temizleme — tüm tabloları siler
     bool clearAllData();

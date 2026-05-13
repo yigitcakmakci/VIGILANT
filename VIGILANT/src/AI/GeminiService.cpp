@@ -36,11 +36,14 @@ GeminiService::GeminiService() {
     DWORD len = GetEnvironmentVariableA("GEMINI_API_KEY", buffer, sizeof(buffer));
     if (len > 0 && len < sizeof(buffer)) {
         m_apiKey = std::string(buffer, len);
-        DebugLog("[AI] Gemini API anahtari yuklendi (" + std::to_string(len) + " karakter)");
+        // Gizlilik: anahtarin uzunlugu da loglanmaz; yalnizca yuklendigi belirtilir.
+        DebugLog("[AI] Gemini API anahtari yuklendi.");
     }
     else {
         DebugLog("[AI] HATA: GEMINI_API_KEY ortam degiskeni bulunamadi!");
     }
+    // Guvenlik: gecici buffer'i temizle (anahtar bellekte kalmasin).
+    SecureZeroMemory(buffer, sizeof(buffer));
 }
 
 bool GeminiService::isAvailable() const {
@@ -57,9 +60,12 @@ bool GeminiService::configure(const std::string& envVarName, const std::string& 
     DWORD len = GetEnvironmentVariableA(envVarName.c_str(), buffer, sizeof(buffer));
     if (len > 0 && len < sizeof(buffer)) {
         m_apiKey = std::string(buffer, len);
-        DebugLog("[AI] API anahtari yuklendi: " + envVarName + " (" + std::to_string(len) + " karakter) -> " + getProviderName() + "/" + model);
+        // Gizlilik: anahtarin uzunlugu loglanmaz.
+        DebugLog("[AI] API anahtari yuklendi: " + envVarName + " -> " + getProviderName() + "/" + model);
+        SecureZeroMemory(buffer, sizeof(buffer));
         return true;
     }
+    SecureZeroMemory(buffer, sizeof(buffer));
     m_apiKey.clear();
     DebugLog("[AI] HATA: " + envVarName + " ortam degiskeni bulunamadi!");
     return false;
@@ -149,9 +155,13 @@ std::string GeminiService::buildProviderNarrativeBody(const std::string& systemP
             "\"messages\":[{\"role\":\"user\",\"content\":\"" + escapeJson(userPrompt) + "\"}],"
             "\"temperature\":0.1,\"max_tokens\":2048}";
     default: // Gemini
+        // NOTE: maxOutputTokens raised to 8192 to fit recursive DynamicGoalTree v2 JSON.
+        // thinkingBudget=0 disables Gemini 2.5 Flash "thinking" mode, which would
+        // otherwise silently consume the entire output budget and return empty text.
         return "{\"system_instruction\":{\"parts\":[{\"text\":\"" + escapeJson(systemPrompt) + "\"}]},"
             "\"contents\":[{\"parts\":[{\"text\":\"" + escapeJson(userPrompt) + "\"}]}],"
-            "\"generationConfig\":{\"temperature\":0.1,\"maxOutputTokens\":2048}}";
+            "\"generationConfig\":{\"temperature\":0.1,\"maxOutputTokens\":8192,"
+            "\"thinkingConfig\":{\"thinkingBudget\":0}}}";
     }
 }
 
@@ -761,4 +771,192 @@ std::string GeminiService::sendPrompt(const std::string& systemPrompt,
     DebugLog("[AI] sendPrompt: yanit cikarildi (" +
              std::to_string(extractedText.size()) + " byte)");
     return extractedText;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Batch C — Weekly Review + Proactive Coach
+// AI yoksa veya yanit bos donerse deterministik fallback metni doner.
+// ─────────────────────────────────────────────────────────────────────────
+static std::string FormatHoursMinutes(int totalSec) {
+    int h = totalSec / 3600;
+    int m = (totalSec % 3600) / 60;
+    char buf[64];
+    if (h > 0) snprintf(buf, sizeof(buf), "%d sa %d dk", h, m);
+    else       snprintf(buf, sizeof(buf), "%d dk", m);
+    return buf;
+}
+
+std::string GeminiService::generateWeeklyReviewNarrative(const nlohmann::json& weeklyData) {
+    int totalSec = weeklyData.value("totalSec", 0);
+    int prodSec  = weeklyData.value("productiveSec", 0);
+    double pct   = weeklyData.value("productivityPct", 0.0);
+    std::string weekStart = weeklyData.value("weekStart", "");
+
+    std::string topApp;
+    if (weeklyData.contains("topApps") && weeklyData["topApps"].is_array() && !weeklyData["topApps"].empty()) {
+        topApp = weeklyData["topApps"][0].value("process", "");
+    }
+
+    // Deterministik fallback (AI yoksa veya basarisiz olursa)
+    auto buildFallback = [&]() {
+        std::string s;
+        s += "Bu hafta toplam " + FormatHoursMinutes(totalSec) +
+             " ekran zamani harcadin; bunun " + FormatHoursMinutes(prodSec) +
+             " kadari uretken (%" + std::to_string((int)pct) + ").";
+        if (!topApp.empty()) {
+            s += " En cok zaman gecirdigin uygulama: " + topApp + ".";
+        }
+        if (pct < 40.0) {
+            s += " Onumuzdeki hafta tek bir oncelikli hedef belirlemek toparlanmana yardim edebilir.";
+        } else if (pct < 70.0) {
+            s += " Iyi bir taban yakaladin; ufak bir disiplin ayari ile uretkenligi yukari tasiyabilirsin.";
+        } else {
+            s += " Mukemmel bir hafta — bu ritmi korumak icin dinlenmeyi de planla.";
+        }
+        return s;
+    };
+
+    if (!isAvailable()) return buildFallback();
+
+    std::string sys =
+        "Sen kullaniciya kisa, yargilamayan, somut bir haftalik ozet sunan bir kocsun. "
+        "Cevabin TR dilinde, en fazla 3 cumle, emoji yok, asla ahlaki yargi icermez.";
+    std::string usr =
+        "Hafta basi: " + weekStart + ". "
+        "Toplam ekran zamani: " + FormatHoursMinutes(totalSec) + ". "
+        "Uretken zaman: " + FormatHoursMinutes(prodSec) +
+        " (%" + std::to_string((int)pct) + "). "
+        + (topApp.empty() ? "" : ("En cok kullanilan uygulama: " + topApp + ". "))
+        + "Ozet uret.";
+
+    std::string out;
+    try { out = sendPrompt(sys, usr); } catch (...) { out.clear(); }
+    if (out.empty()) return buildFallback();
+    return out;
+}
+
+std::string GeminiService::generateProactiveCoachLine(const nlohmann::json& ctx) {
+    std::string proc  = ctx.value("process", "");
+    std::string title = ctx.value("windowTitle", "");
+    std::string cat   = ctx.value("category", "");
+    int score         = ctx.value("score", 0);
+    int idleSec       = ctx.value("idleSec", 0);
+    std::string topGoal = ctx.value("topGoal", "");
+
+    auto buildFallback = [&]() -> std::string {
+        if (score < 0) {
+            if (!topGoal.empty())
+                return "Su an " + (cat.empty() ? proc : cat) + " icindesin — "
+                       + topGoal + " hedefin icin 10 dakikalik bir adim atmak ister misin?";
+            return "Kisa bir mola da iyidir; geri dondugunde bir adim ileri gitmen yeterli.";
+        }
+        if (idleSec > 300) {
+            return "Bir sure ekrandan uzaklastin — bu iyi bir mola, geri dondugunde tek bir gorevle basla.";
+        }
+        if (score > 0) {
+            return "Iyi gidiyorsun; bu ritmi 25 dakika daha sürdürmeyi denemek ister misin?";
+        }
+        return "Bu pencerede ne yapmak istedigine bir cumlede karar verirsen odaklanman kolaylasir.";
+    };
+
+    if (!isAvailable()) return buildFallback();
+
+    std::string sys =
+        "Sen kullaniciya tek cumlelik, yargilamayan, somut bir oneri sunan bir kocsun. "
+        "Cevap TR, tek cumle, emoji yok, soru sorabilirsin ama suclamadan.";
+    std::string usr =
+        "Aktif uygulama: " + proc + ". "
+        "Pencere: " + title + ". "
+        "Kategori: " + cat + ". "
+        "Skor: " + std::to_string(score) + ". "
+        "Bos durma (sn): " + std::to_string(idleSec) + ". "
+        + (topGoal.empty() ? "" : ("Aktif hedef: " + topGoal + ". "))
+        + "Tek cumlelik oneri uret.";
+
+    std::string out;
+    try { out = sendPrompt(sys, usr); } catch (...) { out.clear(); }
+    if (out.empty()) return buildFallback();
+    return out;
+}
+
+// ── Batch D: AI App↔Goal eşleştirme önerisi ──
+nlohmann::json GeminiService::suggestAppGoalLinks(const nlohmann::json& ctx) {
+    nlohmann::json result = nlohmann::json::array();
+    if (!ctx.is_object()) return result;
+    auto apps  = ctx.value("apps",  nlohmann::json::array());
+    auto goals = ctx.value("goals", nlohmann::json::array());
+    if (apps.empty() || goals.empty()) return result;
+
+    auto fallback = [&]() {
+        nlohmann::json out = nlohmann::json::array();
+        auto lower = [](std::string s) {
+            for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+            return s;
+        };
+        for (auto& a : apps) {
+            std::string proc = lower(a.value("process", ""));
+            if (proc.empty()) continue;
+            std::string bestGoal;
+            int bestScore = 0;
+            for (auto& g : goals) {
+                std::string title = g.is_string() ? g.get<std::string>() : g.value("title", "");
+                std::string ltitle = lower(title);
+                int score = 0;
+                static const std::vector<std::pair<std::string, std::vector<std::string>>> hints = {
+                    {"code",   {"yazilim","kod","program","developer","backend","frontend"}},
+                    {"studio", {"yazilim","kod","oyun","game"}},
+                    {"chrome", {"arastirma","ogren","okuma"}},
+                    {"firefox",{"arastirma","ogren","okuma"}},
+                    {"edge",   {"arastirma","ogren","okuma"}},
+                    {"figma",  {"tasarim","ui"}},
+                    {"photoshop",{"tasarim","grafik"}},
+                    {"unity",  {"oyun","game"}},
+                    {"unreal", {"oyun","game"}},
+                    {"obsidian",{"not","yazma","ogren"}},
+                    {"notion", {"not","planlama","yazma"}},
+                };
+                for (auto& [needle, words] : hints) {
+                    if (proc.find(needle) == std::string::npos) continue;
+                    for (auto& w : words) if (ltitle.find(w) != std::string::npos) score += 3;
+                }
+                if (score > bestScore) { bestScore = score; bestGoal = title; }
+            }
+            if (!bestGoal.empty()) {
+                out.push_back({ {"process", a.value("process","")}, {"goalTitle", bestGoal} });
+            }
+        }
+        return out;
+    };
+
+    if (m_apiKey.empty()) return fallback();
+
+    std::string sys =
+        "Sen bir uretkenlik kocusun. Verilen Windows uygulamalarini, kullanicinin mevcut hedeflerinden "
+        "EN UYGUN olanina baglamak icin oneri uretirsin. Sadece JSON dizi dondur. Her oge: "
+        "{\"process\":\"...\", \"goalTitle\":\"...\"}. Hedefler listesi disindaki bir basligi UYDURMA. "
+        "Hicbir uygulama uyumlu degilse onu listeye ekleme. Aciklama yazma, sadece JSON.";
+
+    std::string usr = "Hedefler: " + goals.dump() + "\nUygulamalar: " + apps.dump() + "\nJSON dizi:";
+
+    std::string out;
+    try { out = sendPrompt(sys, usr); } catch (...) { out.clear(); }
+    if (out.empty()) return fallback();
+
+    auto first = out.find('[');
+    auto last  = out.rfind(']');
+    if (first == std::string::npos || last == std::string::npos || last <= first)
+        return fallback();
+    std::string body = out.substr(first, last - first + 1);
+    auto parsed = nlohmann::json::parse(body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_array()) return fallback();
+
+    for (auto& item : parsed) {
+        if (!item.is_object()) continue;
+        std::string p = item.value("process", "");
+        std::string g = item.value("goalTitle", "");
+        if (p.empty() || g.empty()) continue;
+        result.push_back({ {"process", p}, {"goalTitle", g} });
+    }
+    if (result.empty()) return fallback();
+    return result;
 }
